@@ -1,90 +1,91 @@
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local player = Players.LocalPlayer
+local StarterPlayer = game:GetService("StarterPlayer")
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
 
--- 如果玩家数据未加载则等待
-if not player then
-    Players.PlayerAdded:Wait()
-    player = Players.LocalPlayer
+local locations = {
+    ReplicatedStorage = ReplicatedStorage,
+    StarterPlayer = StarterPlayer,
+    Workspace = Workspace,
+    StarterGui = game:GetService("StarterGui")
+}
+
+local function short(t)
+    return tostring(t):gsub("Instance: ", "")
 end
 
--- 打印调试信息到控制台
-local function log(...)
-    print("[MadCity-AutoXP]", ...)
-end
-
--- 扫描所有 RemoteEvent / RemoteFunction
-local remotes = {}
-for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-        remotes[#remotes+1] = obj
+local function dumpDescendants(root, maxPrint)
+    maxPrint = maxPrint or 300
+    local count = 0
+    local results = {}
+    for _, obj in ipairs(root:GetDescendants()) do
+        if count >= maxPrint then break end
+        local ty = obj.ClassName
+        local name = obj.Name
+        local path = obj:GetFullName()
+        table.insert(results, {path = path, class = ty, name = name})
+        count = count + 1
     end
+    return results
 end
-log("找到 Remotes 数量:", #remotes)
 
--- 查找函数：模糊匹配名字
-local function findRemote(keyword)
-    for _, r in ipairs(remotes) do
-        if string.find(string.lower(r.Name), string.lower(keyword)) then
-            return r
+local function findRemotesAndUseful(root)
+    local remotes = {}
+    for _, obj in ipairs(root:GetDescendants()) do
+        local cls = obj.ClassName
+        if cls == "RemoteEvent" or cls == "RemoteFunction" then
+            table.insert(remotes, {path = obj:GetFullName(), class = cls, name = obj.Name})
         end
     end
-    return nil
+    return remotes
 end
 
--- 安全调用（自动判断类型）
-local function callRemote(remote, ...)
-    if not remote then return end
-    if remote:IsA("RemoteFunction") then
-        local ok, res = pcall(function()
-            return remote:InvokeServer(...)
-        end)
-        if not ok then
-            log("InvokeServer 调用失败:", remote.Name, res)
-        else
-            log("InvokeServer 成功:", remote.Name)
-        end
-    elseif remote:IsA("RemoteEvent") then
-        local ok, res = pcall(function()
-            remote:FireServer(...)
-        end)
-        if not ok then
-            log("FireServer 调用失败:", remote.Name, res)
-        else
-            log("FireServer 成功:", remote.Name)
+local function findByKeywords(root, keywords)
+    local found = {}
+    local lowkeywords = {}
+    for _, k in ipairs(keywords) do lowkeywords[#lowkeywords+1] = string.lower(k) end
+    for _, obj in ipairs(root:GetDescendants()) do
+        local lname = string.lower(obj.Name)
+        for _, kw in ipairs(lowkeywords) do
+            if string.find(lname, kw, 1, true) then
+                table.insert(found, {path = obj:GetFullName(), class = obj.ClassName, name = obj.Name})
+                break
+            end
         end
     end
+    return found
 end
 
--- 自动装备背包物品
-local function equipTool(toolName)
-    local backpack = player:FindFirstChild("Backpack")
-    local char = player.Character
-    if not backpack or not char then return end
-    local tool = backpack:FindFirstChild(toolName)
-    if tool and not char:FindFirstChild(tool.Name) then
-        tool.Parent = char
-        log("已装备:", toolName)
+-- 主要流程
+print("=== Safe Diagnostics Start ===")
+print("LocalPlayer:", Players.LocalPlayer and Players.LocalPlayer.Name or "nil")
+
+for label, loc in pairs(locations) do
+    print(string.format("---- Scanning %s (%s) ----", label, short(loc)))
+    -- 总体统计
+    local all = dumpDescendants(loc, 500)
+    print(string.format("  扫描到对象（上限500）：%d", #all))
+    -- 列出前 40 条以便快速查看（控制台量大时先看这个）
+    for i = 1, math.min(40, #all) do
+        local it = all[i]
+        print(string.format("    [%d] %s  (%s)", i, it.path, it.class))
+    end
+
+    -- 查找 Remotes
+    local remotes = findRemotesAndUseful(loc)
+    print(string.format("  RemoteEvent/RemoteFunction 个数: %d", #remotes))
+    for i, r in ipairs(remotes) do
+        print(string.format("    R%d: %s  (%s)", i, r.path, r.class))
+    end
+
+    -- 针对常见关键字再做模糊搜索（XP, Rank, Arrest, Eject, Team, Shop, Premium, Crate, Sound）
+    local keys = {"xp","experience","rank","arrest","eject","team","shop","premium","crate","sound","handcuff","server","player"}
+    local hits = findByKeywords(loc, keys)
+    print(string.format("  包含常见关键字的对象数量: %d (显示前50)", #hits))
+    for i = 1, math.min(50, #hits) do
+        local h = hits[i]
+        print(string.format("    H%d: %s  (%s)", i, h.path, h.class))
     end
 end
 
--- 自动调用经验或行动远程
-spawn(function()
-    local xpRemote = findRemote("XP") or findRemote("Experience")
-    local arrestRemote = findRemote("Arrest") or findRemote("Eject")
-    local teamRemote = findRemote("Team") or findRemote("SetTeam")
-
-    while task.wait(1) do
-        -- 自动切换队伍
-        callRemote(teamRemote, "Police")
-        -- 自动使用功能
-        callRemote(arrestRemote, player)
-        -- 自动刷经验
-        callRemote(xpRemote, math.random(5,10))
-        -- 自动装备手铐
-        equipTool("Handcuffs")
-    end
-end)
-
-log("脚本启动完成。等待触发远程事件...")
+print("=== Diagnostics End ===")
