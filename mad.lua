@@ -1,46 +1,71 @@
--- 修复版脚本 - 针对游戏中的远程事件
-local debugLog = {}
-local maxLogEntries = 50
+-- 测试
+print("脚本开始加载...")
 
-local function addLog(message)
-    table.insert(debugLog, 1, message)
-    if #debugLog > maxLogEntries then
-        table.remove(debugLog)
-    end
-    print("DEBUG: " .. message)
-end
-
-addLog("脚本开始执行")
-
-local function errorHandler(err)
-    addLog("发生错误: " .. tostring(err))
-    return err
-end
-
-local function tryFireEvent(eventName, ...)
-    local event = game:GetService("ReplicatedStorage"):FindFirstChild(eventName)
-    if event then
-        addLog("尝试触发事件: " .. eventName)
-        local success, result = pcall(function()
-            return event:FireServer(...)
-        end)
-        if success then
-            addLog("✅ 事件触发成功: " .. eventName)
-            return true
-        else
-            addLog("❌ 事件触发失败: " .. tostring(result))
+-- 等待游戏完全加载
+local function waitForGameLoad()
+    local startTime = tick()
+    while not game:IsLoaded() do
+        wait(0.1)
+        if tick() - startTime > 10 then
+            print("❌ 游戏加载超时")
+            return false
         end
-    else
-        addLog("❌ 事件不存在: " .. eventName)
     end
-    return false
+    return true
 end
 
+if not waitForGameLoad() then
+    print("❌ 游戏加载失败，脚本停止")
+    return
+end
+
+print("✅ 游戏加载完成")
+
+-- 等待玩家加载
+local function waitForPlayer()
+    local players = game:GetService("Players")
+    local startTime = tick()
+    
+    while not players.LocalPlayer do
+        wait(0.5)
+        if tick() - startTime > 10 then
+            print("❌ 玩家加载超时")
+            return nil
+        end
+    end
+    
+    return players.LocalPlayer
+end
+
+local player = waitForPlayer()
+if not player then
+    print("❌ 无法获取本地玩家")
+    return
+end
+
+print("✅ 玩家加载完成:", player.Name)
+
+-- 简单的调试日志系统
+local debugLog = {}
+local function addLog(message)
+    table.insert(debugLog, message)
+    print("DEBUG:", message)
+    
+    -- 限制日志数量
+    if #debugLog > 20 then
+        table.remove(debugLog, 1)
+    end
+end
+
+addLog("脚本初始化开始")
+
+-- 主功能
 local function main()
-    addLog("1. 设置队伍为Police...")
-    local success, result = xpcall(function()
+    addLog("1. 尝试设置队伍...")
+    
+    local success, result = pcall(function()
         return game:GetService("ReplicatedStorage").RemoteFunction:InvokeServer("SetTeam", "Police")
-    end, errorHandler)
+    end)
     
     if success then
         addLog("✅ 队伍设置成功")
@@ -48,51 +73,62 @@ local function main()
         addLog("❌ 队伍设置失败: " .. tostring(result))
     end
     
-    wait(0.75)
+    wait(1)
     
-    addLog("2. 开始装备手铐和触发事件...")
-    game:GetService("RunService").RenderStepped:Connect(function()
-        xpcall(function()
-            local player = game:GetService("Players").LocalPlayer
-            if not player or not player.Character then return end
-            
-            -- 检查手铐是否已在角色身上
-            local handcuff = player.Character:FindFirstChild("Handcuffs")
-            if handcuff then
-                addLog("✅ 手铐已装备: " .. handcuff.Name)
-                
-                -- 根据您的游戏，尝试不同的事件和参数组合
-                -- 优先级1: RedEvent (最可能正确)
-                if tryFireEvent("RedEvent", "Eject") then return end
-                
-                -- 优先级2: PostieSent (备选)
-                if tryFireEvent("PostieSent", "Eject") then return end
-                
-                -- 优先级3: PostieReceived (备选)
-                if tryFireEvent("PostieReceived", "Eject") then return end
-                
-                -- 优先级4: 尝试不带参数
-                if tryFireEvent("RedEvent") then return end
-                if tryFireEvent("PostieSent") then return end
-                
-                addLog("❌ 所有事件尝试均失败")
-            else
-                -- 装备手铐逻辑
-                addLog("手铐未装备，检查背包...")
-                local backpack = player:FindFirstChild("Backpack")
-                if backpack then
-                    local handcuff = backpack:FindFirstChild("Handcuffs")
-                    if handcuff then
-                        handcuff.Parent = player.Character
-                        addLog("✅ 手铐装备完成")
-                    else
-                        addLog("❌ 背包中未找到Handcuffs")
-                    end
+    addLog("2. 开始装备手铐...")
+    
+    -- 等待角色生成
+    if not player.Character then
+        player.CharacterAdded:Wait()
+    end
+    wait(1) -- 确保角色完全加载
+    
+    addLog("角色已就绪")
+    
+    -- 装备手铐
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        local handcuff = backpack:FindFirstChild("Handcuffs")
+        if handcuff then
+            handcuff.Parent = player.Character
+            addLog("✅ 手铐装备完成")
+        else
+            addLog("❌ 背包中未找到手铐")
+            -- 列出背包中所有工具
+            for _, item in pairs(backpack:GetChildren()) do
+                if item:IsA("Tool") then
+                    addLog("背包工具: " .. item.Name)
                 end
             end
-        end, errorHandler)
-    end)
+        end
+    else
+        addLog("❌ 背包不存在")
+    end
+    
+    addLog("3. 尝试触发事件...")
+    
+    -- 简单的事件触发测试
+    local events = {"RedEvent", "PostieSent", "Event"}
+    for _, eventName in pairs(events) do
+        local event = game:GetService("ReplicatedStorage"):FindFirstChild(eventName)
+        if event then
+            addLog("找到事件: " .. eventName)
+            local success, err = pcall(function()
+                event:FireServer("Eject")
+            end)
+            if success then
+                addLog("✅ 事件触发成功: " .. eventName)
+            else
+                addLog("❌ 事件触发失败: " .. tostring(err))
+            end
+        end
+    end
+    
+    addLog("🎯 脚本执行完成")
 end
 
-xpcall(main, errorHandler)
-addLog("脚本初始化完成")
+-- 安全执行主函数
+local success, err = pcall(main)
+if not success then
+    print("❌ 脚本执行错误:", err)
+end
