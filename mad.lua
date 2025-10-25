@@ -1,132 +1,195 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 if not player then return end
 
-print("[Script] Loaded for player:", player.Name)
+-- 配置
+local CONFIG = {
+    USE_INTERVAL = 0.1,          -- 使用间隔（秒）
+    RANDOM_DELAY = 0.1,          -- 随机延迟范围
+    MAX_USES_PER_MINUTE = 100000000000,   -- 每分钟最大使用次数（避免异常）
+    ENABLE_LOGGING = true
+}
 
--- 等待角色加载
-if not player.Character then
-    player.CharacterAdded:Wait()
+-- 状态跟踪
+local state = {
+    usageCount = 0,
+    lastMinuteUsage = 0,
+    lastMinuteReset = tick(),
+    isActive = true
+}
+
+-- 日志函数
+local function log(message)
+    if CONFIG.ENABLE_LOGGING then
+        print("[HandcuffXP] " .. message)
+    end
 end
 
--- 查找所有远程对象
-local function findAllRemotes()
-    local remotes = {}
+-- 查找经验相关远程事件
+local function findExperienceRemotes()
+    local xpRemotes = {}
+    local commonNames = {
+        "Experience", "XP", "AddXP", "GiveXP", "AwardXP",
+        "Handcuff", "Handcuffs", "Arrest", "Cuff",
+        "ToolUse", "UseTool", "ToolRemote"
+    }
     
-    local function searchFolder(folder)
-        for _, child in ipairs(folder:GetChildren()) do
-            if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
-                remotes[child.Name] = child
-                print("[Script] Found remote:", child.Name, "("..child.ClassName..")")
-            end
-            if #child:GetChildren() > 0 then
-                searchFolder(child)
-            end
+    for _, name in ipairs(commonNames) do
+        local remote = ReplicatedStorage:FindFirstChild(name)
+        if remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
+            xpRemotes[name] = remote
+            log("Found XP remote: " .. name)
         end
     end
     
-    searchFolder(ReplicatedStorage)
-    return remotes
+    return xpRemotes
 end
 
-local allRemotes = findAllRemotes()
+local xpRemotes = findExperienceRemotes()
 
--- 手铐经验系统
-local experienceCooldown = 0
-local handcuffUsageCount = 0
-local lastHandcuffTime = 0
-
--- 主要的手铐使用函数
-local function useHandcuffsForXP()
+-- 模拟手铐使用获取经验
+local function simulateHandcuffForXP()
     local char = player.Character
-    if not char or not char:FindFirstChild("Humanoid") then return false end
-    
-    -- 确保手铐在角色身上
-    local handcuffs = char:FindFirstChild("Handcuffs")
-    if not handcuffs then
-        -- 从背包拿手铐
-        local backpack = player:FindFirstChild("Backpack")
-        if backpack then
-            local backpackHandcuffs = backpack:FindFirstChild("Handcuffs")
-            if backpackHandcuffs and backpackHandcuffs:IsA("Tool") then
-                backpackHandcuffs.Parent = char
-                handcuffs = backpackHandcuffs
-                print("[Script] Equipped handcuffs from backpack")
-            end
-        end
-    end
-    
-    if not handcuffs or not handcuffs:IsA("Tool") then
-        print("[Script] No handcuffs found")
+    if not char or not char:FindFirstChild("Humanoid") then
+        log("Character not ready")
         return false
     end
     
-    -- 模拟手铐使用（多种方式尝试）
-    local success = false
+    -- 检查使用频率限制
+    local currentTime = tick()
+    if currentTime - state.lastMinuteReset > 60 then
+        state.lastMinuteUsage = 0
+        state.lastMinuteReset = currentTime
+    end
     
-    -- 方式1: 直接激活工具
-    pcall(function()
-        handcuffs:Activate()
-        success = true
-    end)
+    if state.lastMinuteUsage >= CONFIG.MAX_USES_PER_MINUTE then
+        log("Rate limit reached, waiting for reset")
+        return false
+    end
     
-    -- 方式2: 通过远程事件通知使用手铐
-    local eventNames = {"Handcuff", "Handcuffs", "Arrest", "Cuff", "UseHandcuffs", "Experience", "XP"}
-    for _, eventName in ipairs(eventNames) do
-        if allRemotes[eventName] then
-            pcall(function()
-                if allRemotes[eventName]:IsA("RemoteEvent") then
-                    allRemotes[eventName]:FireServer(player.Name, "HandcuffTarget")
-                    success = true
-                elseif allRemotes[eventName]:IsA("RemoteFunction") then
-                    allRemotes[eventName]:InvokeServer("UseHandcuffs", player.Name)
-                    success = true
-                end
-            end)
+    -- 确保手铐装备
+    local handcuffs = char:FindFirstChild("Handcuffs")
+    if not handcuffs then
+        local backpack = player:FindFirstChild("Backpack")
+        if backpack then
+            handcuffs = backpack:FindFirstChild("Handcuffs")
+            if handcuffs and handcuffs:IsA("Tool") then
+                handcuffs.Parent = char
+                log("Equipped handcuffs")
+            end
         end
     end
     
-    -- 方式3: 尝试通用的工具使用事件
-    if allRemotes["ToolRemote"] or allRemotes["UseTool"] then
+    if not handcuffs then
+        log("No handcuffs available")
+        return false
+    end
+    
+    -- 尝试多种经验获取方式
+    local success = false
+    
+    -- 方式1: 直接工具激活
+    pcall(function() 
+        handcuffs:Activate()
+        wait(0.1)
+        handcuffs:Deactivate()
+        success = true
+    end)
+    
+    -- 方式2: 通过经验相关远程事件
+    for name, remote in pairs(xpRemotes) do
         pcall(function()
-            local toolRemote = allRemotes["ToolRemote"] or allRemotes["UseTool"]
-            toolRemote:FireServer(handcuffs, Vector3.new(0, 0, 0)) -- 模拟点击位置
+            if name:lower():find("xp") or name:lower():find("experience") then
+                -- 经验相关事件
+                if remote:IsA("RemoteEvent") then
+                    remote:FireServer(player.Name, 10) -- 假设每次10经验
+                else
+                    remote:InvokeServer("AddXP", player.Name, 10)
+                end
+            else
+                -- 手铐使用事件
+                if remote:IsA("RemoteEvent") then
+                    remote:FireServer(player.Name, "NPC_Target") -- 假设目标是NPC
+                else
+                    remote:InvokeServer("Use", player.Name)
+                end
+            end
             success = true
         end)
     end
     
     if success then
-        handcuffUsageCount = handcuffUsageCount + 1
-        lastHandcuffTime = tick()
-        print("[Script] Handcuffs used successfully (Total uses: "..handcuffUsageCount..")")
+        state.usageCount = state.usageCount + 1
+        state.lastMinuteUsage = state.lastMinuteUsage + 1
+        
+        if state.usageCount % 50 == 0 then
+            log(string.format("Total uses: %d (This minute: %d)", 
+                state.usageCount, state.lastMinuteUsage))
+        end
     end
     
     return success
 end
 
--- 自动刷经验主循环
+-- 主循环
+local lastUseTime = 0
 RunService.Heartbeat:Connect(function(dt)
-    experienceCooldown = math.max(0, experienceCooldown - dt)
+    if not state.isActive then return end
     
-    if experienceCooldown <= 0 then
-        -- 使用手铐刷经验
-        if useHandcuffsForXP() then
-            -- 成功使用手铐，设置冷却时间（可调整）
-            experienceCooldown = 0.2 -- 0.5秒冷却，可以根据需要调整
-            
-            -- 每10次使用显示一次状态
-            if handcuffUsageCount % 10 == 0 then
-                print("[Script] Handcuff usage count:", handcuffUsageCount)
-            end
-        else
-            -- 如果使用失败，稍后重试
-            experienceCooldown = 1
-        end
+    local currentTime = tick()
+    if currentTime - lastUseTime >= CONFIG.USE_INTERVAL then
+        -- 添加随机延迟使行为更自然
+        local randomDelay = math.random() * CONFIG.RANDOM_DELAY
+        wait(randomDelay)
+        
+        simulateHandcuffForXP()
+        lastUseTime = tick()
     end
 end)
 
-print("[Script] Auto handcuff XP system started")
+-- UI控制（可选）
+local function createControlGUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Parent = player.PlayerGui
+    
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 200, 0, 100)
+    frame.Position = UDim2.new(0, 10, 0, 10)
+    frame.BackgroundColor3 = Color3.new(0, 0, 0)
+    frame.BackgroundTransparency = 0.3
+    frame.Parent = screenGui
+    
+    local toggle = Instance.new("TextButton")
+    toggle.Size = UDim2.new(0, 180, 0, 30)
+    toggle.Position = UDim2.new(0, 10, 0, 10)
+    toggle.Text = "Auto Handcuff XP: ON"
+    toggle.Parent = frame
+    
+    local countLabel = Instance.new("TextLabel")
+    countLabel.Size = UDim2.new(0, 180, 0, 50)
+    countLabel.Position = UDim2.new(0, 10, 0, 50)
+    countLabel.Text = "Uses: 0"
+    countLabel.TextColor3 = Color3.new(1, 1, 1)
+    countLabel.BackgroundTransparency = 1
+    countLabel.Parent = frame
+    
+    toggle.MouseButton1Click:Connect(function()
+        state.isActive = not state.isActive
+        toggle.Text = "Auto Handcuff XP: " .. (state.isActive and "ON" or "OFF")
+    end)
+    
+    -- 更新计数器
+    while true do
+        countLabel.Text = string.format("Uses: %d\nThis Minute: %d/%d", 
+            state.usageCount, state.lastMinuteUsage, CONFIG.MAX_USES_PER_MINUTE)
+        wait(1)
+    end
+end
+
+-- 启动GUI（可选）
+pcall(createControlGUI)
+
+log("Advanced handcuff XP system started")
