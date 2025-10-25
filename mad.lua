@@ -1,54 +1,90 @@
--- 修复版：安全的高频循环脚本
-game:GetService("ReplicatedStorage").RemoteFunction:InvokeServer("SetTeam", "Police")
-wait(.75)
+-- 超级详细调试版
+local debugLog = {}
+local maxLogEntries = 50 -- 限制日志条目数量，避免内存溢出
 
--- 使用 RenderStepped 但修复了语法和逻辑错误
-game:GetService("RunService").RenderStepped:Connect(function()
-    -- 安全检查：确保玩家和角色存在
-    local player = game:GetService("Players").LocalPlayer
-    if not player or not player.Character then
-        return
+local function addLog(message)
+    table.insert(debugLog, 1, message) -- 添加到开头，最新的在最前面
+    if #debugLog > maxLogEntries then
+        table.remove(debugLog) -- 移除最旧的条目
     end
-    
-    -- 安全检查：确保背包存在
-    local backpack = player.Backpack
-    if not backpack then
-        return
-    end
-    
-    -- 装备手铐（带安全检查）
-    for i, v in pairs(backpack:GetChildren()) do
-        if v and v.Name == "Handcuffs" then
-            -- 确保手铐工具有效
-            if v:IsA("Tool") then
-                v.Parent = player.Character
-                break
-            end
-        end
-    end
-    
-    -- 安全执行弹出操作
-    local remoteEvent = game:GetService("ReplicatedStorage"):FindFirstChild("Event")
-    if remoteEvent and remoteEvent:IsA("RemoteEvent") then
-        -- 添加参数验证
-        local success, errorMsg = pcall(function()
-            remoteEvent:FireServer("Eject", player)
-        end)
-        if not success then
-            -- 静默处理错误，不输出到控制台
-            -- 可以取消下面注释来查看错误详情
-            -- warn("Eject事件错误: " .. tostring(errorMsg))
-        end
-    end
-end)
-
--- 额外的修复：处理SetMarkerState的NIL参数问题（如果在其他脚本中）
--- 如果您的代码中有SetMarkerState调用，请确保这样使用：
-local function SafeSetMarkerState(markerName)
-    if markerName and markerName ~= "" and markerName ~= "Plane" then -- 修复特定的"Plane"错误
-        -- 这里调用您的SetMarkerState函数
-        -- SetMarkerState(markerName)
-    else
-        -- 静默跳过无效调用
-    end
+    print("DEBUG: " .. message)
 end
+
+addLog("脚本开始执行")
+
+-- 设置错误处理函数
+local function errorHandler(err)
+    addLog("发生错误: " .. tostring(err))
+    
+    -- 输出最近的日志
+    addLog("=== 最近操作记录 ===")
+    for i, logEntry in ipairs(debugLog) do
+        if i <= 10 then -- 只显示最近10条
+            addLog(logEntry)
+        end
+    end
+    
+    return err
+end
+
+-- 主执行函数
+local function main()
+    addLog("1. 设置队伍...")
+    local success, result = xpcall(function()
+        return game:GetService("ReplicatedStorage").RemoteFunction:InvokeServer("SetTeam", "Police")
+    end, errorHandler)
+    
+    if success then
+        addLog("✅ 队伍设置成功")
+    else
+        addLog("❌ 队伍设置失败")
+    end
+    
+    addLog("2. 等待0.75秒...")
+    wait(0.75)
+    
+    addLog("3. 开始高频循环...")
+    game:GetService("RunService").RenderStepped:Connect(function()
+        xpcall(function()
+            -- 您的原始代码逻辑在这里...
+            local player = game:GetService("Players").LocalPlayer
+            addLog("玩家: " .. tostring(player and player.Name or "nil"))
+            
+            if player and player.Character then
+                addLog("角色存在")
+                
+                local backpack = player.Backpack
+                if backpack then
+                    addLog("背包存在，子项数量: " .. #backpack:GetChildren())
+                    
+                    for i, v in pairs(backpack:GetChildren()) do
+                        addLog("检查工具: " .. tostring(v) .. ", 名称: " .. tostring(v.Name))
+                        if v.Name == "Handcuffs" then
+                            addLog("找到手铐，尝试装备...")
+                            v.Parent = player.Character
+                            addLog("手铐装备完成")
+                            break
+                        end
+                    end
+                else
+                    addLog("❌ 背包不存在")
+                end
+                
+                local remoteEvent = game:GetService("ReplicatedStorage"):FindFirstChild("Event")
+                if remoteEvent then
+                    addLog("触发Eject事件...")
+                    remoteEvent:FireServer("Eject", player)
+                    addLog("Eject事件已触发")
+                else
+                    addLog("❌ 未找到Event远程事件")
+                end
+            else
+                addLog("❌ 玩家或角色不存在")
+            end
+        end, errorHandler)
+    end)
+end
+
+-- 启动主函数
+xpcall(main, errorHandler)
+addLog("脚本初始化完成")
