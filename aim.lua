@@ -1,6 +1,7 @@
 --多功能版
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService") -- 添加RunService
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
@@ -11,10 +12,18 @@ local main = {
     enablenpc = false
 }
 
--- 添加初始化状态
+-- 添加初始化状态和性能优化
 local initialized = false
+local lastSearchTime = 0
+local searchInterval = 0.5 -- 每0.5秒搜索一次
 
 local function getClosestHead()
+    -- 限制搜索频率
+    if tick() - lastSearchTime < searchInterval then
+        return nil
+    end
+    lastSearchTime = tick()
+    
     local closestHead
     local closestDistance = math.huge
     
@@ -41,7 +50,8 @@ local function getClosestHead()
                 
                 if root and head and humanoid and humanoid.Health > 0 then
                     local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                    if distance < closestDistance then
+                    -- 添加距离限制
+                    if distance < closestDistance and distance < 500 then
                         closestHead = head
                         closestDistance = distance
                     end
@@ -53,13 +63,18 @@ local function getClosestHead()
 end
 
 local function getClosestNpcHead()
+    -- 限制搜索频率
+    if tick() - lastSearchTime < searchInterval then
+        return nil
+    end
+    
     local closestHead
     local closestDistance = math.huge
     
     if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
     local localHrp = LocalPlayer.Character.HumanoidRootPart
     
-    -- 只搜索Workspace的直接子对象，不递归搜索所有后代
+    -- 只搜索Workspace的直接子对象
     for _, object in ipairs(Workspace:GetChildren()) do
         if object:IsA("Model") then
             local humanoid = object:FindFirstChildOfClass("Humanoid")
@@ -77,7 +92,8 @@ local function getClosestNpcHead()
                 
                 if not isPlayer and head then
                     local distance = (hrp.Position - localHrp.Position).Magnitude
-                    if distance < closestDistance then
+                    -- 添加距离限制
+                    if distance < closestDistance and distance < 500 then
                         closestHead = head
                         closestDistance = distance
                     end
@@ -98,8 +114,14 @@ local function initializeHook()
         local method = getnamecallmethod()
         local args = {...}
         
+        -- 只在必要时处理Raycast调用
         if method == "Raycast" and not checkcaller() then
             local origin = args[1] or Camera.CFrame.Position
+            
+            -- 限制处理频率
+            if tick() - lastSearchTime < searchInterval then
+                return old(self, ...)
+            end
             
             if main.enable then
                 local closestHead = getClosestHead()
