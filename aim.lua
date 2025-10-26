@@ -12,49 +12,71 @@ local main = {
     initialized = false
 }
 
--- 修复卡死问题：添加安全检查和性能优化
+-- 修复卡死问题：简化逻辑，避免复杂嵌套
 local function getClosestHead()
     if not main.initialized then return end
     
     local closestHead
     local closestDistance = math.huge
     
+    -- 检查本地玩家
     if not LocalPlayer or not LocalPlayer.Character then return end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    local localRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return end
     
-    local localRoot = LocalPlayer.Character.HumanoidRootPart
     local localPos = localRoot.Position
     local localTeam = LocalPlayer.Team
     
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        if not player.Character then continue end
+    -- 获取玩家列表
+    local playerList = Players:GetPlayers()
+    
+    for i = 1, #playerList do
+        local player = playerList[i]
         
-        local skip = false
+        -- 跳过本地玩家
+        if player == LocalPlayer then
+            continue
+        end
         
+        -- 跳过无效玩家
+        if not player or not player.Character then
+            continue
+        end
+        
+        -- 团队检查
         if main.teamcheck and player.Team == localTeam then
-            skip = true
+            continue
         end
         
-        if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
-            skip = true
+        -- 好友检查
+        if main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
+            continue
         end
         
-        if not skip then
-            local character = player.Character
-            local root = character:FindFirstChild("HumanoidRootPart")
-            local head = character:FindFirstChild("Head")
-            local humanoid = character:FindFirstChildOfClass("Humanoid")
-            
-            if root and head and humanoid and humanoid.Health > 0 then
-                local distance = (root.Position - localPos).Magnitude
-                if distance < closestDistance then
-                    closestHead = head
-                    closestDistance = distance
-                end
-            end
+        local character = player.Character
+        
+        -- 检查角色部件
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local head = character:FindFirstChild("Head")
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        
+        if not root or not head or not humanoid then
+            continue
+        end
+        
+        -- 检查生命值
+        if humanoid.Health <= 0 then
+            continue
+        end
+        
+        -- 计算距离
+        local distance = (root.Position - localPos).Magnitude
+        if distance < closestDistance then
+            closestHead = head
+            closestDistance = distance
         end
     end
+    
     return closestHead
 end
 
@@ -93,7 +115,7 @@ local function getClosestNpcHead()
     return closestHead
 end
 
--- 修复初始化函数
+-- 初始化函数
 local function initializeAimBot()
     if main.initialized then return end
     
@@ -142,7 +164,7 @@ local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
     Icon = "rbxassetid://129260712070622",
     IconThemed = true,
-    Author = "🦐🐔8修",
+    Author = "idk",
     Folder = "CloudHub",
     Size = UDim2.fromOffset(300, 270),
     Transparent = true,
@@ -175,7 +197,7 @@ MainSection = Window:Section({
 
 Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
--- 修复初始化按钮显示问题
+-- 初始化按钮
 local initButton
 initButton = Main:Button({
     Title = "初始化子弹追踪",
