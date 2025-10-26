@@ -12,62 +12,45 @@ local main = {
     initialized = false
 }
 
--- 修复卡死问题：简化逻辑，避免复杂嵌套
+-- 彻底修复卡死问题：简化逻辑，避免任何可能导致无限循环的情况
 local function getClosestHead()
-    if not main.initialized then return end
+    if not main.initialized or not main.enable then return end
     
-    local closestHead
-    local closestDistance = math.huge
-    
-    -- 检查本地玩家
+    -- 基本安全检查
     if not LocalPlayer or not LocalPlayer.Character then return end
     local localRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not localRoot then return end
     
+    local closestHead = nil
+    local closestDistance = 1000 -- 设置最大距离限制
+    
     local localPos = localRoot.Position
     local localTeam = LocalPlayer.Team
     
-    -- 获取玩家列表
-    local playerList = Players:GetPlayers()
-    
-    for i = 1, #playerList do
-        local player = playerList[i]
-        
-        -- 跳过本地玩家
-        if player == LocalPlayer then
-            continue
-        end
+    -- 直接遍历玩家，避免复杂逻辑
+    for _, player in ipairs(Players:GetPlayers()) do
+        -- 跳过自己
+        if player == LocalPlayer then goto continue end
         
         -- 跳过无效玩家
-        if not player or not player.Character then
-            continue
-        end
-        
-        -- 团队检查
-        if main.teamcheck and player.Team == localTeam then
-            continue
-        end
-        
-        -- 好友检查
-        if main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
-            continue
-        end
+        if not player.Character then goto continue end
         
         local character = player.Character
         
-        -- 检查角色部件
+        -- 跳过死亡玩家
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then goto continue end
+        
+        -- 跳过没有必要部件的玩家
         local root = character:FindFirstChild("HumanoidRootPart")
         local head = character:FindFirstChild("Head")
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not root or not head then goto continue end
         
-        if not root or not head or not humanoid then
-            continue
-        end
+        -- 团队检查
+        if main.teamcheck and player.Team == localTeam then goto continue end
         
-        -- 检查生命值
-        if humanoid.Health <= 0 then
-            continue
-        end
+        -- 好友检查
+        if main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then goto continue end
         
         -- 计算距离
         local distance = (root.Position - localPos).Magnitude
@@ -75,6 +58,8 @@ local function getClosestHead()
             closestHead = head
             closestDistance = distance
         end
+        
+        ::continue::
     end
     
     return closestHead
@@ -156,6 +141,7 @@ local function initializeAimBot()
     end))
     
     main.initialized = true
+    print("子弹追踪初始化成功")
 end
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
@@ -197,7 +183,7 @@ MainSection = Window:Section({
 
 Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
--- 初始化按钮
+-- 修复初始化按钮显示问题
 local initButton
 initButton = Main:Button({
     Title = "初始化子弹追踪",
@@ -205,8 +191,20 @@ initButton = Main:Button({
     Callback = function()
         initializeAimBot()
         if main.initialized then
-            initButton:SetText("已初始化")
-            initButton:SetDisabled(true)
+            -- 尝试直接修改按钮属性
+            pcall(function()
+                initButton.Title = "已初始化"
+                initButton:SetDisabled(true)
+            end)
+            
+            -- 如果上面的方法失败，尝试重新创建按钮
+            if not initButton then
+                initButton = Main:Button({
+                    Title = "已初始化",
+                    Image = "bird",
+                    Disabled = true
+                })
+            end
         end
     end
 })
