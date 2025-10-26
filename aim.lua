@@ -59,12 +59,8 @@ local function getClosestNpcHead()
     if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
     local localHrp = LocalPlayer.Character.HumanoidRootPart
     
-    -- 添加计数器防止卡死
-    local searchCount = 0
-    for _, object in ipairs(Workspace:GetDescendants()) do
-        searchCount = searchCount + 1
-        if searchCount > 300 then break end -- 限制搜索数量
-        
+    -- 只搜索Workspace的直接子对象，不递归搜索所有后代
+    for _, object in ipairs(Workspace:GetChildren()) do
         if object:IsA("Model") then
             local humanoid = object:FindFirstChildOfClass("Humanoid")
             local hrp = object:FindFirstChild("HumanoidRootPart") or object.PrimaryPart
@@ -145,7 +141,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 300), -- 稍微增加高度
+    Size = UDim2.fromOffset(300, 300),
     Transparent = true,
     Theme = "Dark",
     User = {
