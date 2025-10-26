@@ -19,7 +19,7 @@ local function initialize()
     print("初始化成功")
 end
 
--- 获取最近的玩家头部（原有玩家追踪代码，不改动）
+-- 获取最近的玩家头部（保持原有玩家追踪代码）
 local function getClosestHead()
     local closestHead
     local closestDistance = main.maxDistance
@@ -61,91 +61,7 @@ local function getClosestHead()
     return closestHead
 end
 
--- NPC 缓存（优化版）
-local cachedNpcHead = nil
-local cachedNpcHeadPos = nil
-local cachedNpcDistSq = math.huge
-local npcUpdateTimer = 0
-local npcFolder = Workspace:FindFirstChild("NPCs") -- 请根据游戏实际 NPC 容器修改路径
-
--- Heartbeat 周期更新 NPC
-RunService.Heartbeat:Connect(function(dt)
-    if main.enablenpc then
-        npcUpdateTimer = npcUpdateTimer + dt
-        if npcUpdateTimer >= main.npcUpdateRate then
-            npcUpdateTimer = 0
-            cachedNpcHead = nil
-            cachedNpcHeadPos = nil
-            cachedNpcDistSq = main.maxDistance * main.maxDistance
-
-            if npcFolder and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                local localHrp = LocalPlayer.Character.HumanoidRootPart
-                for _, npc in ipairs(npcFolder:GetChildren()) do
-                    if npc:IsA("Model") then
-                        local humanoid = npc:FindFirstChildOfClass("Humanoid")
-                        local hrp = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
-                        local head = npc:FindFirstChild("Head")
-                        if humanoid and hrp and head and humanoid.Health > 0 then
-                            local diff = hrp.Position - localHrp.Position
-                            local distSq = diff.X*diff.X + diff.Y*diff.Y + diff.Z*diff.Z
-                            if distSq < cachedNpcDistSq then
-                                cachedNpcDistSq = distSq
-                                cachedNpcHead = head
-                                cachedNpcHeadPos = head.Position
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    else
-        cachedNpcHead = nil
-        cachedNpcHeadPos = nil
-        cachedNpcDistSq = math.huge
-    end
-end)
-
--- 钩子 Raycast 方法
-old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
-    
-    if method == "Raycast" and not checkcaller() then
-        local origin = args[1] or Camera.CFrame.Position
-        
-        -- 玩家子弹追踪（保持原有逻辑）
-        if main.enable then
-            local closestHead = getClosestHead()
-            if closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
-            end
-        end
-        
-        -- NPC 子弹追踪（优化后缓存读取）
-        if main.enablenpc and cachedNpcHead and cachedNpcHeadPos then
-            local diff = cachedNpcHeadPos - origin
-            local distSq = diff.X*diff.X + diff.Y*diff.Y + diff.Z*diff.Z
-            if distSq <= (main.maxDistance * main.maxDistance) then
-                return {
-                    Instance = cachedNpcHead,
-                    Position = cachedNpcHeadPos,
-                    Normal = (origin - cachedNpcHeadPos).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = math.sqrt(distSq)
-                }
-            end
-        end
-    end
-    return old(self, ...)
-end))
-
--- 加载 UI 库
+-- ================== UI 加载 ==================
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 -- 创建 UI 窗口
@@ -230,3 +146,89 @@ Main:Toggle({
         main.enablenpc = state
     end
 })
+
+-- ================== NPC 优化追踪 ==================
+local cachedNpcHead = nil
+local cachedNpcHeadPos = nil
+local cachedNpcDistSq = math.huge
+local npcUpdateTimer = 0
+local npcFolder = Workspace:FindFirstChild("NPCs") -- 请根据游戏实际 NPC 容器修改路径
+
+-- Heartbeat 周期更新 NPC
+RunService.Heartbeat:Connect(function(dt)
+    -- 使用 pcall 保证不会报错阻塞 UI
+    pcall(function()
+        if main.enablenpc then
+            npcUpdateTimer = npcUpdateTimer + dt
+            if npcUpdateTimer >= main.npcUpdateRate then
+                npcUpdateTimer = 0
+                cachedNpcHead = nil
+                cachedNpcHeadPos = nil
+                cachedNpcDistSq = main.maxDistance * main.maxDistance
+                if npcFolder and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                    local localHrp = LocalPlayer.Character.HumanoidRootPart
+                    for _, npc in ipairs(npcFolder:GetChildren()) do
+                        if npc:IsA("Model") then
+                            local humanoid = npc:FindFirstChildOfClass("Humanoid")
+                            local hrp = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+                            local head = npc:FindFirstChild("Head")
+                            if humanoid and hrp and head and humanoid.Health > 0 then
+                                local diff = hrp.Position - localHrp.Position
+                                local distSq = diff.X*diff.X + diff.Y*diff.Y + diff.Z*diff.Z
+                                if distSq < cachedNpcDistSq then
+                                    cachedNpcDistSq = distSq
+                                    cachedNpcHead = head
+                                    cachedNpcHeadPos = head.Position
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        else
+            cachedNpcHead = nil
+            cachedNpcHeadPos = nil
+            cachedNpcDistSq = math.huge
+        end
+    end)
+end)
+
+-- ================== 钩子 Raycast 方法 ==================
+old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    
+    if method == "Raycast" and not checkcaller() then
+        local origin = args[1] or Camera.CFrame.Position
+        
+        -- 玩家子弹追踪（保持原有逻辑）
+        if main.enable then
+            local closestHead = getClosestHead()
+            if closestHead then
+                return {
+                    Instance = closestHead,
+                    Position = closestHead.Position,
+                    Normal = (origin - closestHead.Position).Unit,
+                    Material = Enum.Material.Plastic,
+                    Distance = (closestHead.Position - origin).Magnitude
+                }
+            end
+        end
+        
+        -- NPC 子弹追踪（优化后缓存读取）
+        if main.enablenpc and cachedNpcHead and cachedNpcHeadPos then
+            local diff = cachedNpcHeadPos - origin
+            local distSq = diff.X*diff.X + diff.Y*diff.Y + diff.Z*diff.Z
+            if distSq <= (main.maxDistance * main.maxDistance) then
+                return {
+                    Instance = cachedNpcHead,
+                    Position = cachedNpcHeadPos,
+                    Normal = (origin - cachedNpcHeadPos).Unit,
+                    Material = Enum.Material.Plastic,
+                    Distance = math.sqrt(distSq)
+                }
+            end
+        end
+    end
+    return old(self, ...)
+end))
