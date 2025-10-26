@@ -1,7 +1,6 @@
 --多功能版
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService") -- 添加RunService
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
@@ -9,79 +8,90 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    enablenpc = false
+    enablenpc = false,
+    initialized = false -- 添加初始化状态
 }
 
--- 添加初始化状态和性能优化
-local initialized = false
-local lastSearchTime = 0
-local searchInterval = 0.5 -- 每0.5秒搜索一次
+-- 安全获取角色部件的函数
+local function safeGetCharacterParts(character)
+    if not character or not character:IsA("Model") then
+        return nil, nil, nil
+    end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then
+        return nil, nil, nil
+    end
+    
+    local root = character:FindFirstChild("HumanoidRootPart")
+    local head = character:FindFirstChild("Head")
+    
+    if not root or not head then
+        return nil, nil, nil
+    end
+    
+    return root, head, humanoid
+end
 
 local function getClosestHead()
-    -- 限制搜索频率
-    if tick() - lastSearchTime < searchInterval then
-        return nil
-    end
-    lastSearchTime = tick()
+    if not main.initialized then return end -- 未初始化时不执行
     
     local closestHead
     local closestDistance = math.huge
     
     if not LocalPlayer.Character then return end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    local localRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return end
+    
+    local localPosition = localRoot.Position
+    local localTeam = LocalPlayer.Team
     
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local skip = false
-            
-            if main.teamcheck and player.Team == LocalPlayer.Team then
-                skip = true
+        if player == LocalPlayer then continue end
+        
+        local character = player.Character
+        local root, head, humanoid = safeGetCharacterParts(character)
+        
+        if root and head and humanoid then
+            -- 团队检查
+            if main.teamcheck and player.Team == localTeam then
+                continue
             end
             
-            if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
-                skip = true
+            -- 好友检查
+            if main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
+                continue
             end
             
-            if not skip then
-                local character = player.Character
-                local root = character:FindFirstChild("HumanoidRootPart")
-                local head = character:FindFirstChild("Head")
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                
-                if root and head and humanoid and humanoid.Health > 0 then
-                    local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                    -- 添加距离限制
-                    if distance < closestDistance and distance < 500 then
-                        closestHead = head
-                        closestDistance = distance
-                    end
-                end
+            local distance = (root.Position - localPosition).Magnitude
+            if distance < closestDistance then
+                closestHead = head
+                closestDistance = distance
             end
         end
     end
+    
     return closestHead
 end
 
 local function getClosestNpcHead()
-    -- 限制搜索频率
-    if tick() - lastSearchTime < searchInterval then
-        return nil
-    end
+    if not main.initialized then return end -- 未初始化时不执行
     
     local closestHead
     local closestDistance = math.huge
     
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
-    local localHrp = LocalPlayer.Character.HumanoidRootPart
+    if not LocalPlayer.Character then return end
+    local localRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return end
     
-    -- 只搜索Workspace的直接子对象
-    for _, object in ipairs(Workspace:GetChildren()) do
+    local localPosition = localRoot.Position
+    
+    for _, object in ipairs(Workspace:GetDescendants()) do
         if object:IsA("Model") then
-            local humanoid = object:FindFirstChildOfClass("Humanoid")
-            local hrp = object:FindFirstChild("HumanoidRootPart") or object.PrimaryPart
-            local head = object:FindFirstChild("Head")
+            local root, head, humanoid = safeGetCharacterParts(object)
             
-            if humanoid and hrp and humanoid.Health > 0 then
+            if root and head and humanoid then
+                -- 检查是否为玩家角色
                 local isPlayer = false
                 for _, pl in ipairs(Players:GetPlayers()) do
                     if pl.Character == object then
@@ -90,10 +100,9 @@ local function getClosestNpcHead()
                     end
                 end
                 
-                if not isPlayer and head then
-                    local distance = (hrp.Position - localHrp.Position).Magnitude
-                    -- 添加距离限制
-                    if distance < closestDistance and distance < 500 then
+                if not isPlayer then
+                    local distance = (root.Position - localPosition).Magnitude
+                    if distance < closestDistance then
                         closestHead = head
                         closestDistance = distance
                     end
@@ -104,24 +113,16 @@ local function getClosestNpcHead()
     return closestHead
 end
 
--- 初始化钩子函数
-local function initializeHook()
-    if initialized then return end
+-- 初始化函数
+local function initializeAimBot()
+    if main.initialized then return end
     
     old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        if not initialized then return old(self, ...) end
-        
         local method = getnamecallmethod()
         local args = {...}
         
-        -- 只在必要时处理Raycast调用
         if method == "Raycast" and not checkcaller() then
             local origin = args[1] or Camera.CFrame.Position
-            
-            -- 限制处理频率
-            if tick() - lastSearchTime < searchInterval then
-                return old(self, ...)
-            end
             
             if main.enable then
                 local closestHead = getClosestHead()
@@ -152,7 +153,8 @@ local function initializeHook()
         return old(self, ...)
     end))
     
-    initialized = true
+    main.initialized = true
+    print("子弹追踪初始化完成")
 end
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
@@ -163,7 +165,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 300),
+    Size = UDim2.fromOffset(300, 320), -- 增加高度以容纳新按钮
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -198,16 +200,12 @@ Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 local initButton
 initButton = Main:Button({
     Title = "初始化子弹追踪",
-    Image = "power",
+    Image = "bird",
     Callback = function()
-        initializeHook()
-        initButton:Update({
-            Title = "已初始化",
-            Image = "check",
-            Callback = function() 
-                print("已经初始化完成！")
-            end
-        })
+        initializeAimBot()
+        -- 禁用按钮并改变文本
+        initButton:SetText("已初始化")
+        initButton:SetDisabled(true)
     end
 })
 
@@ -216,8 +214,8 @@ Main:Toggle({
     Image = "bird",
     Value = false,
     Callback = function(state)
-        if not initialized then
-            print("请先点击初始化按钮！")
+        if not main.initialized then
+            warn("请先初始化子弹追踪！")
             return
         end
         main.enable = state
@@ -247,8 +245,8 @@ Main:Toggle({
     Image = "bird",
     Value = false,
     Callback = function(state)
-        if not initialized then
-            print("请先点击初始化按钮！")
+        if not main.initialized then
+            warn("请先初始化子弹追踪！")
             return
         end
         main.enablenpc = state
