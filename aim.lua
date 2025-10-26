@@ -64,7 +64,7 @@ end
 -- ================== UI 加载 ==================
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
--- 创建 UI 窗口
+-- 创建主窗口
 local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
     Icon = "rbxassetid://129260712070622",
@@ -83,24 +83,28 @@ local Window = WindUI:CreateWindow({
     ScrollBarEnabled = true,
 })
 
+-- ✅ 注册主 Frame（解决 UI 不显示问题）
+local MainFrame = Window:CreateFrame({
+    Title = "主面板",
+    Size = UDim2.fromOffset(300, 270),
+    Transparent = true,
+    Theme = "Dark"
+})
+
+-- 创建打开按钮并绑定到 Frame
 Window:EditOpenButton({
     Title = "打开UI",
     Icon = "monitor",
+    Frame = MainFrame, -- ⚠️ 必须绑定 Frame
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
-    Color = ColorSequence.new(
-        Color3.fromHex("FF0F7B"), 
-        Color3.fromHex("F89B29")
-    ),
-    Draggable = true,
+    Color = ColorSequence.new(Color3.fromHex("FF0F7B"), Color3.fromHex("F89B29")),
+    Draggable = true
 })
 
-MainSection = Window:Section({
-    Title = "子追",
-    Opened = true,
-})
-
-Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
+-- 在 Frame 上创建 Section / Tab
+local MainSection = MainFrame:Section({ Title = "子追", Opened = true })
+local Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
 -- 添加初始化按钮
 Main:Button({
