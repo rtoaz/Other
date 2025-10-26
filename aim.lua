@@ -1,10 +1,13 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
+
 local oldNamecall
 local oldIndex
+
 local main = {
     enable = false,
     teamcheck = false,
@@ -19,12 +22,18 @@ local main = {
     circle_scale = 3
 }
 
+-- 以下是 getClosestHead 和 getClosestNpcHead 函数（保持不变）
 local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
     
-    if not LocalPlayer.Character then return end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    if not LocalPlayer.Character then
+        return
+    end
+    
+    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        return
+    end
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -54,6 +63,7 @@ local function getClosestHead()
             end
         end
     end
+    
     return closestHead
 end
 
@@ -61,7 +71,10 @@ local function getClosestNpcHead()
     local closestHead
     local closestDistance = math.huge
     
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        return
+    end
+    
     local localHrp = LocalPlayer.Character.HumanoidRootPart
     
     for _, object in ipairs(Workspace:GetDescendants()) do
@@ -89,11 +102,14 @@ local function getClosestNpcHead()
             end
         end
     end
+    
     return closestHead
 end
 
+-- 以下是 getOriginAndDirection 和 hookmetamethod 函数（保持不变）
 local function getOriginAndDirection(self, method, args)
     local origin, direction
+    
     if method == "Raycast" then
         origin = args[1]
         direction = args[2]
@@ -104,6 +120,7 @@ local function getOriginAndDirection(self, method, args)
     elseif method == "ScreenPointToRay" or method == "ViewportPointToRay" then
         origin = Camera.CFrame.Position
     end
+    
     return origin, direction
 end
 
@@ -117,13 +134,17 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             if not closestHead and main.enablenpc then
                 closestHead = getClosestNpcHead()
             end
+            
             if closestHead then
                 local origin = getOriginAndDirection(self, method, args)
-                if not origin then origin = Camera.CFrame.Position end
+                if not origin then
+                    origin = Camera.CFrame.Position
+                end
+                
                 local direction = (closestHead.Position - origin).Unit
                 local dist = (closestHead.Position - origin).Magnitude
-                
                 local visible = true
+                
                 if not main.wallhack then
                     local params = RaycastParams.new()
                     params.FilterType = Enum.RaycastFilterType.Exclude
@@ -140,13 +161,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                     local material = Enum.Material.Plastic
                     
                     if method == "Raycast" then
-                        return {
-                            Instance = closestHead,
-                            Position = hitPos,
-                            Normal = normal,
-                            Material = material,
-                            Distance = dist
-                        }
+                        return { Instance = closestHead, Position = hitPos, Normal = normal, Material = material, Distance = dist }
                     elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
                         return closestHead, hitPos, normal, material
                     elseif method == "ScreenPointToRay" or method == "ViewportPointToRay" then
@@ -156,6 +171,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             end
         end
     end
+    
     return oldNamecall(self, ...)
 end))
 
@@ -166,12 +182,13 @@ oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, index)
             if not closestHead and main.enablenpc then
                 closestHead = getClosestNpcHead()
             end
+            
             if closestHead then
                 local origin = self.Origin.Position
                 local direction = (closestHead.Position - origin).Unit
                 local dist = (closestHead.Position - origin).Magnitude
-                
                 local visible = true
+                
                 if not main.wallhack then
                     local params = RaycastParams.new()
                     params.FilterType = Enum.RaycastFilterType.Exclude
@@ -192,9 +209,11 @@ oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, index)
             end
         end
     end
+    
     return oldIndex(self, index)
 end))
 
+-- 绘制目标连线和圆
 local line = Drawing.new("Line")
 line.Visible = false
 line.Color = Color3.fromRGB(255, 255, 255)
@@ -214,10 +233,12 @@ local function updateVisuals()
     if not closestHead and main.enablenpc then
         closestHead = getClosestNpcHead()
     end
+    
     if main.enable and closestHead then
         local pos3d = closestHead.Position
         local screenPos, onScreen = Camera:WorldToViewportPoint(pos3d)
         local pos2d = Vector2.new(screenPos.X, screenPos.Y)
+        
         if onScreen then
             if main.draw_line then
                 local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
@@ -228,6 +249,7 @@ local function updateVisuals()
             else
                 line.Visible = false
             end
+            
             if main.draw_circle then
                 local dist = screenPos.Z
                 local headRadius3d = closestHead.Size.Y / 2
@@ -252,8 +274,17 @@ end
 
 RunService.RenderStepped:Connect(updateVisuals)
 
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+-- 加载 WindUI
+local success, WindUI = pcall(function()
+    return loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+end)
 
+if not success then
+    warn("加载WindUI失败: " .. tostring(WindUI))
+    return
+end
+
+-- 创建 UI
 local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
     Icon = "rbxassetid://129260712070622",
@@ -265,7 +296,9 @@ local Window = WindUI:CreateWindow({
     Theme = "Dark",
     User = {
         Enabled = true,
-        Callback = function() print("clicked") end,
+        Callback = function()
+            print("已点击")
+        end,
         Anonymous = false
     },
     SideBarWidth = 200,
@@ -278,7 +311,7 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("FF0F7B"), 
+        Color3.fromHex("FF0F7B"),
         Color3.fromHex("F89B29")
     ),
     Draggable = true,
@@ -289,7 +322,13 @@ MainSection = Window:Section({
     Opened = true,
 })
 
-Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
+Main = MainSection:Tab({
+    Title = "设置",
+    Icon = "Sword"
+})
+
+-- 添加调试打印
+print("创建开关...")
 
 Main:Toggle({
     Title = "开启子弹追踪",
@@ -297,6 +336,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
+        print("子弹追踪: " .. tostring(state))
     end
 })
 
@@ -306,6 +346,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.teamcheck = state
+        print("队伍检查: " .. tostring(state))
     end
 })
 
@@ -315,6 +356,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.friendcheck = state
+        print("好友检查: " .. tostring(state))
     end
 })
 
@@ -324,6 +366,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enablenpc = state
+        print("NPC追踪: " .. tostring(state))
     end
 })
 
@@ -333,8 +376,11 @@ Main:Toggle({
     Value = true,
     Callback = function(state)
         main.wallhack = state
+        print("穿墙: " .. tostring(state))
     end
 })
+
+print("创建命中率滑块...")
 
 Main:Slider({
     Title = "命中率 (%)",
@@ -343,8 +389,11 @@ Main:Slider({
     Value = 100,
     Callback = function(value)
         main.hit_rate = value
+        print("命中率设置为: " .. value)
     end
 })
+
+print("创建方法下拉菜单...")
 
 Main:Dropdown({
     Title = "追踪方式",
@@ -352,16 +401,23 @@ Main:Dropdown({
     Value = "Raycast",
     Callback = function(value)
         main.method = value
+        print("方法设置为: " .. value)
     end
 })
 
-Visuals = MainSection:Tab({ Title = "视觉", Icon = "Eye" })
+Visuals = MainSection:Tab({
+    Title = "视觉",
+    Icon = "Eye"
+})
+
+print("创建视觉开关和滑块...")
 
 Visuals:Toggle({
     Title = "目标连线 (白线)",
     Value = false,
     Callback = function(state)
         main.draw_line = state
+        print("绘制连线: " .. tostring(state))
     end
 })
 
@@ -372,6 +428,7 @@ Visuals:Slider({
     Value = 1,
     Callback = function(value)
         main.line_thickness = value
+        print("连线粗细设置为: " .. value)
     end
 })
 
@@ -380,6 +437,7 @@ Visuals:Toggle({
     Value = false,
     Callback = function(state)
         main.draw_circle = state
+        print("绘制圆圈: " .. tostring(state))
     end
 })
 
@@ -390,5 +448,8 @@ Visuals:Slider({
     Value = 3,
     Callback = function(value)
         main.circle_scale = value
+        print("圆圈缩放设置为: " .. value)
     end
 })
+
+print("UI设置完成！")
