@@ -1,9 +1,16 @@
--- 多功能版
+-- 多功能版（修复加载问题的完整脚本）
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
+local HttpService = game:GetService("HttpService")
 local Camera = Workspace.CurrentCamera
+
+-- 必须在客户端（LocalScript）运行
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    warn("[子弹追踪] LocalPlayer 未找到 — 请在客户端 (LocalScript) 中运行此脚本。脚本停止加载。")
+    return
+end
 
 -- 设置
 local main = {
@@ -13,21 +20,22 @@ local main = {
 }
 
 -- 使用 UserId 作为键，避免持有玩家对象导致引用问题
-local PlayerParts = {} -- [userId] = { Root = Instance, Head = Instance, Humanoid = Instance, Alive = bool }
+local PlayerParts = {} -- [userId] = { Root = Instance, Head = Instance, Humanoid = Instance, Alive = bool, Player = Player }
+
 local function clearPartsForUserId(uid)
     PlayerParts[uid] = nil
 end
 
--- 安全尝试等待子项（避免无限等待）
 local function safeWaitForChild(parent, name, timeout)
-    local success, inst = pcall(function()
+    local ok, result = pcall(function()
         return parent:WaitForChild(name, timeout)
     end)
-    if success then return inst end
+    if ok then
+        return result
+    end
     return nil
 end
 
--- 更新单名玩家缓存（在 CharacterAdded / Humanoid 死亡 / PlayerRemoving 时使用）
 local function cacheCharacterParts(player)
     if not player then return end
     local uid = player.UserId
@@ -36,16 +44,14 @@ local function cacheCharacterParts(player)
     if not player.Character then return end
     local char = player.Character
 
-    -- 尝试安全等待必要部件（短超时）
     local root = safeWaitForChild(char, "HumanoidRootPart", 2)
     local head = safeWaitForChild(char, "Head", 2)
-    local humanoid = nil
-    local ok, h = pcall(function() return char:FindFirstChildOfClass("Humanoid") end)
-    if ok then humanoid = h end
+    local humanoid
+    pcall(function() humanoid = char:FindFirstChildOfClass("Humanoid") end)
 
     if root and head and humanoid and humanoid.Health > 0 then
         PlayerParts[uid] = {Root = root, Head = head, Humanoid = humanoid, Alive = true, Player = player}
-        -- 当 Humanoid 死亡或移除时清理缓存
+        -- Humanoid 死亡时标记
         local conn
         conn = humanoid.Died:Connect(function()
             if conn then conn:Disconnect() end
@@ -56,19 +62,12 @@ local function cacheCharacterParts(player)
     end
 end
 
--- 监听玩家加入/离开/重生，维护缓存
 Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function()
-        -- small delay to allow parts to exist, then cache
-        task.defer(function()
-            cacheCharacterParts(player)
-        end)
+        task.defer(function() cacheCharacterParts(player) end)
     end)
-    -- if player already has character
     if player.Character then
-        task.defer(function()
-            cacheCharacterParts(player)
-        end)
+        task.defer(function() cacheCharacterParts(player) end)
     end
 end)
 
@@ -76,27 +75,24 @@ Players.PlayerRemoving:Connect(function(player)
     clearPartsForUserId(player.UserId)
 end)
 
--- 初始化现有玩家缓存
+-- 初始化
 for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then
         if player.Character then
-            cacheCharacterParts(player)
+            task.defer(function() cacheCharacterParts(player) end)
         end
         player.CharacterAdded:Connect(function()
-            task.defer(function()
-                cacheCharacterParts(player)
-            end)
+            task.defer(function() cacheCharacterParts(player) end)
         end)
     end
 end
 
--- === 背景更新最接近头部（节流） ===
-local aimTargetHead = nil   -- Instance (Head)
-local aimTargetPos = nil    -- Vector3
-local updateInterval = 0.08 -- 80ms 更新一次（12.5Hz），可调
+-- 背景计算最近头（节流）
+local aimTargetHead = nil
+local aimTargetPos = nil
+local updateInterval = 0.08 -- 80ms
 local lastUpdate = 0
 
--- 计算最近头的函数（只在心跳循环内运行）
 local function computeClosestHead()
     if not LocalPlayer or not LocalPlayer.Character then
         aimTargetHead = nil
@@ -117,21 +113,17 @@ local function computeClosestHead()
     for uid, parts in pairs(PlayerParts) do
         if parts and parts.Alive and parts.Root and parts.Head and parts.Humanoid and parts.Player then
             local player = parts.Player
-            -- 跳过自己或者无效玩家
             if player ~= LocalPlayer then
-                -- 队伍过滤
                 if main.teamcheck and player.Team == LocalPlayer.Team then
                     -- skip
                 else
-                    -- 好友过滤
                     if main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
                         -- skip
                     else
-                        -- 当前生命值检查（避免死亡后残留）
                         local ok, health = pcall(function() return parts.Humanoid.Health end)
                         if ok and health and health > 0 then
-                            local success, rootPos = pcall(function() return parts.Root.Position end)
-                            if success and rootPos then
+                            local ok2, rootPos = pcall(function() return parts.Root.Position end)
+                            if ok2 and rootPos then
                                 local dist = (rootPos - myPos).Magnitude
                                 if dist < bestDist then
                                     bestDist = dist
@@ -139,7 +131,6 @@ local function computeClosestHead()
                                 end
                             end
                         else
-                            -- 标记为不活跃，下一轮可能被清理
                             parts.Alive = false
                         end
                     end
@@ -150,7 +141,6 @@ local function computeClosestHead()
 
     aimTargetHead = bestHead
     if bestHead then
-        -- 捕获位置快照，避免在钩子内读取实例属性
         local ok, pos = pcall(function() return bestHead.Position end)
         aimTargetPos = (ok and pos) and pos or nil
     else
@@ -158,7 +148,6 @@ local function computeClosestHead()
     end
 end
 
--- 心跳循环：节流并持续维护 aimTarget
 RunService.Heartbeat:Connect(function(dt)
     local now = tick()
     if now - lastUpdate >= updateInterval then
@@ -167,52 +156,57 @@ RunService.Heartbeat:Connect(function(dt)
     end
 end)
 
--- === Hook Raycast：钩子里只做最小读取 ===
--- 保存原始 hook 返回值
-local oldHook = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
+-- Hook Raycast：注意正确保存旧的 namecall（避免 nil 问题）
+local hookSucceeded = false
+local oldNamecall
 
-    -- 仅处理 Raycast 且来自非脚本调用（防止对自己钩子造成影响）
-    if method == "Raycast" and not checkcaller() then
-        -- 如果未启用则调用原方法
-        if not main.enable then
-            return old(self, ...)
-        end
+local ok, err = pcall(function()
+    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
 
-        -- 如果有缓存的目标头并且有效，则返回伪造的 RaycastResult（结构化的 table）
-        if aimTargetHead and aimTargetPos then
-            -- origin 可以是在 args[1]，如果不存在则尝试相机位置
-            local origin = args[1]
-            if typeof(origin) ~= "Vector3" then
-                if Camera and Camera.CFrame then
-                    origin = Camera.CFrame.Position
-                else
-                    origin = Vector3.new(0,0,0)
-                end
+        if method == "Raycast" and not checkcaller() then
+            if not main.enable then
+                return oldNamecall(self, ...)
             end
 
-            -- 计算 normal & distance 在外面尽量用缓存值
-            local success, normal = pcall(function()
-                local dir = origin - aimTargetPos
-                return dir.Magnitude > 0 and dir.Unit or Vector3.new(0,1,0)
-            end)
-            local dist = (aimTargetPos - origin).Magnitude
+            if aimTargetHead and aimTargetPos then
+                local origin = args[1]
+                if typeof(origin) ~= "Vector3" then
+                    if Camera and Camera.CFrame then
+                        origin = Camera.CFrame.Position
+                    else
+                        origin = Vector3.new(0,0,0)
+                    end
+                end
 
-            return {
-                Instance = aimTargetHead,
-                Position = aimTargetPos,
-                Normal = success and normal or Vector3.new(0,1,0),
-                Material = Enum.Material.Plastic,
-                Distance = dist
-            }
+                local success, normal = pcall(function()
+                    local dir = origin - aimTargetPos
+                    return (dir.Magnitude > 0) and dir.Unit or Vector3.new(0,1,0)
+                end)
+                local dist = (aimTargetPos - origin).Magnitude
+
+                return {
+                    Instance = aimTargetHead,
+                    Position = aimTargetPos,
+                    Normal = success and normal or Vector3.new(0,1,0),
+                    Material = Enum.Material.Plastic,
+                    Distance = dist
+                }
+            end
         end
-    end
 
-    return old(self, ...)
-end))
+        return oldNamecall(self, ...)
+    end))
+end)
 
--- === WindUI（保持原有 UI，不影响性能） ===
+if ok and oldNamecall then
+    hookSucceeded = true
+else
+    warn("[子弹追踪] 无法安装 hookmetamethod: "..tostring(err))
+end
+
+-- WindUI（安全加载）
 local WindUILoadSuccess, WindUI = pcall(function()
     return loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 end)
@@ -265,13 +259,17 @@ if WindUILoadSuccess and WindUI then
         Callback = function(state) main.friendcheck = state end
     })
 else
-    warn("WindUI 加载失败，UI 将不可用")
+    warn("[子弹追踪] WindUI 加载失败，UI 不可用: "..tostring(WindUI))
 end
 
--- 最后：提供手动清理入口（调试用）
+-- 调试/清理接口
 _G.__CloudHub_Cleanup = function()
-    -- 清理缓存与引用（不一定解除 hook）
     PlayerParts = {}
     aimTargetHead = nil
     aimTargetPos = nil
+    main.enable = false
+    if hookSucceeded and oldNamecall then
+        -- 无法安全移除 hookmetamethod，但你可以选择重置行为：关闭 enable 并清理缓存
+        warn("[子弹追踪] 已清理缓存与禁用功能（hook 保持不变）。")
+    end
 end
