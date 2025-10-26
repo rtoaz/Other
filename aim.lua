@@ -1,9 +1,18 @@
---多功能版
+-- 多功能版
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
+
+-- 配置参数
+local CONFIG = {
+    MAX_DISTANCE = 200, -- 最大检测距离
+    UPDATE_INTERVAL = 0.2, -- 更新间隔（秒）
+    MAX_TARGETS = 20 -- 最大目标数量限制
+}
+
 local main = {
     enable = false,
     teamcheck = false,
@@ -11,179 +20,209 @@ local main = {
     enablenpc = false
 }
 
--- 添加性能优化变量
-local lastPlayerCheck = 0
-local lastNpcCheck = 0
-local cachedClosestHead = nil
-local cachedClosestNpcHead = nil
-local CACHE_DURATION = 0.1 -- 缓存时间（秒）
+-- 缓存系统
+local cache = {
+    playerTargets = {},
+    npcTargets = {},
+    lastUpdate = 0,
+    currentPlayerTarget = nil,
+    currentNpcTarget = nil
+}
 
-local function getClosestHead()
-    -- 添加缓存检查，避免每帧都计算
-    if tick() - lastPlayerCheck < CACHE_DURATION and cachedClosestHead then
-        return cachedClosestHead
+-- 安全包装函数
+local function safeFindFirstChild(instance, name)
+    local success, result = pcall(function()
+        return instance:FindFirstChild(name)
+    end)
+    return success and result or nil
+end
+
+local function safeGetPlayers()
+    local success, result = pcall(function()
+        return Players:GetPlayers()
+    end)
+    return success and result or {}
+end
+
+local function safeGetDescendants(workspace)
+    local success, result = pcall(function()
+        return workspace:GetDescendants()
+    end)
+    return success and result or {}
+end
+
+-- 优化的目标查找函数
+local function updateTargets()
+    if tick() - cache.lastUpdate < CONFIG.UPDATE_INTERVAL then
+        return
     end
     
-    local closestHead
-    local closestDistance = math.huge
+    cache.lastUpdate = tick()
     
-    if not LocalPlayer.Character then return end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    -- 清空缓存
+    cache.playerTargets = {}
+    cache.npcTargets = {}
+    cache.currentPlayerTarget = nil
+    cache.currentNpcTarget = nil
     
-    local localHrp = LocalPlayer.Character.HumanoidRootPart
+    -- 安全检查本地玩家
+    if not LocalPlayer or not LocalPlayer.Character then return end
+    local localHrp = safeFindFirstChild(LocalPlayer.Character, "HumanoidRootPart")
+    if not localHrp then return end
     
-    -- 添加距离限制，避免遍历太远的玩家
-    local MAX_DISTANCE = 500
+    local localPosition = localHrp.Position
     
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local skip = false
+    -- 查找玩家目标（优化版本）
+    if main.enable then
+        local players = safeGetPlayers()
+        local targetCount = 0
+        
+        for _, player in ipairs(players) do
+            if targetCount >= CONFIG.MAX_TARGETS then break end
             
-            if main.teamcheck and player.Team == LocalPlayer.Team then
-                skip = true
-            end
-            
-            if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
-                skip = true
-            end
-            
-            if not skip then
-                local character = player.Character
-                local root = character:FindFirstChild("HumanoidRootPart")
-                local head = character:FindFirstChild("Head")
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if player ~= LocalPlayer and player.Character then
+                -- 快速检查
+                local skip = false
                 
-                if root and head and humanoid and humanoid.Health > 0 then
-                    local distance = (root.Position - localHrp.Position).Magnitude
-                    -- 添加距离检查
-                    if distance < closestDistance and distance < MAX_DISTANCE then
-                        closestHead = head
-                        closestDistance = distance
+                if main.teamcheck and player.Team == LocalPlayer.Team then
+                    skip = true
+                end
+                
+                if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
+                    skip = true
+                end
+                
+                if not skip then
+                    local character = player.Character
+                    local hrp = safeFindFirstChild(character, "HumanoidRootPart")
+                    local head = safeFindFirstChild(character, "Head")
+                    local humanoid = safeFindFirstChild(character, "Humanoid")
+                    
+                    if hrp and head and humanoid then
+                        -- 快速距离检查
+                        local distance = (hrp.Position - localPosition).Magnitude
+                        if distance < CONFIG.MAX_DISTANCE then
+                            table.insert(cache.playerTargets, {
+                                head = head,
+                                distance = distance,
+                                position = hrp.Position
+                            })
+                            targetCount = targetCount + 1
+                        end
                     end
                 end
             end
         end
+        
+        -- 找到最近的玩家目标
+        if #cache.playerTargets > 0 then
+            table.sort(cache.playerTargets, function(a, b)
+                return a.distance < b.distance
+            end)
+            cache.currentPlayerTarget = cache.playerTargets[1].head
+        end
     end
     
-    -- 更新缓存
-    lastPlayerCheck = tick()
-    cachedClosestHead = closestHead
-    return closestHead
-end
-
-local function getClosestNpcHead()
-    -- 添加缓存检查
-    if tick() - lastNpcCheck < CACHE_DURATION and cachedClosestNpcHead then
-        return cachedClosestNpcHead
-    end
-    
-    local closestHead
-    local closestDistance = math.huge
-    
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
-    local localHrp = LocalPlayer.Character.HumanoidRootPart
-    
-    -- 添加距离限制
-    local MAX_DISTANCE = 500
-    
-    -- 优化NPC搜索，避免遍历所有后代
-    for _, object in ipairs(Workspace:GetChildren()) do
-        if object:IsA("Model") then
-            -- 先快速检查距离
-            local hrp = object:FindFirstChild("HumanoidRootPart") or object.PrimaryPart
-            if hrp then
-                local distance = (hrp.Position - localHrp.Position).Magnitude
-                if distance > MAX_DISTANCE then
-                    continue
-                end
-            end
+    -- 查找NPC目标（优化版本）
+    if main.enablenpc then
+        local descendants = safeGetDescendants(Workspace)
+        local targetCount = 0
+        
+        for _, object in ipairs(descendants) do
+            if targetCount >= CONFIG.MAX_TARGETS then break end
             
-            local humanoid = object:FindFirstChildOfClass("Humanoid")
-            local head = object:FindFirstChild("Head")
-            
-            if humanoid and humanoid.Health > 0 and head then
-                local isPlayer = false
-                -- 优化玩家检查
-                if object:FindFirstChild("Humanoid") then
-                    for _, pl in ipairs(Players:GetPlayers()) do
-                        if pl.Character == object then
+            if object:IsA("Model") then
+                local hrp = safeFindFirstChild(object, "HumanoidRootPart") or object.PrimaryPart
+                local head = safeFindFirstChild(object, "Head")
+                local humanoid = safeFindFirstChild(object, "Humanoid")
+                
+                if hrp and head and humanoid and humanoid.Health > 0 then
+                    -- 检查是否为玩家角色
+                    local isPlayer = false
+                    for _, player in ipairs(Players:GetPlayers()) do
+                        if player.Character == object then
                             isPlayer = true
                             break
                         end
                     end
-                end
-                
-                if not isPlayer then
-                    local distance = (hrp.Position - localHrp.Position).Magnitude
-                    if distance < closestDistance then
-                        closestHead = head
-                        closestDistance = distance
+                    
+                    if not isPlayer then
+                        local distance = (hrp.Position - localPosition).Magnitude
+                        if distance < CONFIG.MAX_DISTANCE then
+                            table.insert(cache.npcTargets, {
+                                head = head,
+                                distance = distance,
+                                position = hrp.Position
+                            })
+                            targetCount = targetCount + 1
+                        end
                     end
                 end
             end
         end
+        
+        -- 找到最近的NPC目标
+        if #cache.npcTargets > 0 then
+            table.sort(cache.npcTargets, function(a, b)
+                return a.distance < b.distance
+            end)
+            cache.currentNpcTarget = cache.npcTargets[1].head
+        end
     end
-    
-    -- 更新缓存
-    lastNpcCheck = tick()
-    cachedClosestNpcHead = closestHead
-    return closestHead
 end
 
+-- 使用单独的线程更新目标
+local updateConnection
+local function startUpdateLoop()
+    if updateConnection then
+        updateConnection:Disconnect()
+    end
+    
+    updateConnection = RunService.Heartbeat:Connect(function()
+        local success, err = pcall(updateTargets)
+        if not success then
+            warn("目标更新错误: " .. tostring(err))
+        end
+    end)
+end
+
+-- 简化的钩子函数
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
-    local args = {...}
     
     if method == "Raycast" and not checkcaller() then
+        local args = {...}
         local origin = args[1] or Camera.CFrame.Position
         
-        -- 添加安全检查
-        if not main.enable and not main.enablenpc then
-            return old(self, ...)
+        -- 快速检查是否有可用目标
+        if main.enable and cache.currentPlayerTarget then
+            return {
+                Instance = cache.currentPlayerTarget,
+                Position = cache.currentPlayerTarget.Position,
+                Normal = (origin - cache.currentPlayerTarget.Position).Unit,
+                Material = Enum.Material.Plastic,
+                Distance = (cache.currentPlayerTarget.Position - origin).Magnitude
+            }
         end
         
-        if main.enable then
-            local success, closestHead = pcall(getClosestHead)
-            if success and closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
-            end
-        end
-        
-        if main.enablenpc then
-            local success, closestNpcHead = pcall(getClosestNpcHead)
-            if success and closestNpcHead then
-                return {
-                    Instance = closestNpcHead,
-                    Position = closestNpcHead.Position,
-                    Normal = (origin - closestNpcHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestNpcHead.Position - origin).Magnitude
-                }
-            end
+        if main.enablenpc and cache.currentNpcTarget then
+            return {
+                Instance = cache.currentNpcTarget,
+                Position = cache.currentNpcTarget.Position,
+                Normal = (origin - cache.currentNpcTarget.Position).Unit,
+                Material = Enum.Material.Plastic,
+                Distance = (cache.currentNpcTarget.Position - origin).Magnitude
+            }
         end
     end
+    
     return old(self, ...)
 end))
 
--- 添加性能监控（可选）
-spawn(function()
-    while wait(5) do
-        -- 定期清理缓存，避免内存泄漏
-        if tick() - lastPlayerCheck > 10 then
-            cachedClosestHead = nil
-        end
-        if tick() - lastNpcCheck > 10 then
-            cachedClosestNpcHead = nil
-        end
-    end
-end)
+-- 启动更新循环
+startUpdateLoop()
 
+-- UI部分保持不变
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -229,9 +268,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
-        -- 清除缓存，确保重新计算
-        cachedClosestHead = nil
-        lastPlayerCheck = 0
+        cache.lastUpdate = 0 -- 强制立即更新
     end
 })
 
@@ -241,8 +278,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.teamcheck = state
-        cachedClosestHead = nil
-        lastPlayerCheck = 0
+        cache.lastUpdate = 0
     end
 })
 
@@ -252,8 +288,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.friendcheck = state
-        cachedClosestHead = nil
-        lastPlayerCheck = 0
+        cache.lastUpdate = 0
     end
 })
 
@@ -263,7 +298,19 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enablenpc = state
-        cachedClosestNpcHead = nil
-        lastNpcCheck = 0
+        cache.lastUpdate = 0
     end
 })
+
+-- 添加性能监控
+spawn(function()
+    while wait(10) do
+        -- 定期清理和重置
+        if not main.enable and not main.enablenpc then
+            cache.playerTargets = {}
+            cache.npcTargets = {}
+            cache.currentPlayerTarget = nil
+            cache.currentNpcTarget = nil
+        end
+    end
+end)
