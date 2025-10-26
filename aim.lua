@@ -9,8 +9,7 @@ local main = {
     teamcheck = false,
     friendcheck = false,
     enablenpc = false,
-    maxDistance = 500, -- 最大追踪距离
-    npcCheckInterval = 0.1 -- 新增：NPC检测节流间隔（秒）
+    maxDistance = 500 -- 新增：最大追踪距离
 }
 
 -- 初始化提示
@@ -60,7 +59,7 @@ local function getClosestHead()
     return closestHead
 end
 
--- 获取最近的 NPC 头部（优化版）
+-- 获取最近的 NPC 头部
 local function getClosestNpcHead()
     local closestHead
     local closestDistance = main.maxDistance
@@ -69,22 +68,24 @@ local function getClosestNpcHead()
         return nil
     end
     local localHrp = LocalPlayer.Character.HumanoidRootPart
-    local localPos = localHrp.Position
     
-    -- 使用 GetPartBoundsInRadius 限制检测范围
-    local parts = Workspace:GetPartBoundsInRadius(localPos, main.maxDistance)
-    for _, part in ipairs(parts) do
-        local model = part:FindFirstAncestorOfClass("Model")
-        if model then
-            local humanoid = model:FindFirstChildOfClass("Humanoid")
-            local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-            local head = model:FindFirstChild("Head")
+    for _, object in ipairs(Workspace:GetDescendants()) do
+        if object:IsA("Model") then
+            local humanoid = object:FindFirstChildOfClass("Humanoid")
+            local hrp = object:FindFirstChild("HumanoidRootPart") or object.PrimaryPart
+            local head = object:FindFirstChild("Head")
             
             if humanoid and hrp and head and humanoid.Health > 0 then
-                -- 检查是否为玩家角色
-                local isPlayer = Players:GetPlayerFromCharacter(model) ~= nil
+                local isPlayer = false
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl.Character == object then
+                        isPlayer = true
+                        break
+                    end
+                end
+                
                 if not isPlayer then
-                    local distance = (hrp.Position - localPos).Magnitude
+                    local distance = (hrp.Position - localHrp.Position).Magnitude
                     if distance < closestDistance then
                         closestHead = head
                         closestDistance = distance
@@ -94,17 +95,6 @@ local function getClosestNpcHead()
         end
     end
     return closestHead
-end
-
--- 节流机制：限制 NPC 检测频率
-local lastNpcCheck = 0
-local function canCheckNpc()
-    local currentTime = tick()
-    if currentTime - lastNpcCheck >= main.npcCheckInterval then
-        lastNpcCheck = currentTime
-        return true
-    end
-    return false
 end
 
 -- 钩子 Raycast 方法
@@ -128,7 +118,7 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             end
         end
         
-        if main.enablenpc and canCheckNpc() then
+        if main.enablenpc then
             local closestNpcHead = getClosestNpcHead()
             if closestNpcHead then
                 return {
@@ -152,7 +142,7 @@ local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
     Icon = "rbxassetid://129260712070622",
     IconThemed = true,
-    Author = "🦐🐔8修",
+    Author = "idk",
     Folder = "CloudHub",
     Size = UDim2.fromOffset(300, 270),
     Transparent = true,
@@ -185,7 +175,7 @@ MainSection = Window:Section({
 
 Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
--- 初始化按钮
+-- 添加初始化按钮
 Main:Button({
     Title = "初始化",
     Image = "gear",
@@ -229,6 +219,3 @@ Main:Toggle({
         main.enablenpc = state
     end
 })
-
--- 脚本加载时自动调用初始化
-initialize()
