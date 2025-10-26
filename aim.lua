@@ -12,7 +12,7 @@ local main = {
     initialized = false
 }
 
--- 彻底修复卡死问题：简化逻辑，避免任何可能导致无限循环的情况
+-- 修复卡死问题：使用更安全的循环方式
 local function getClosestHead()
     if not main.initialized or not main.enable then return end
     
@@ -27,39 +27,44 @@ local function getClosestHead()
     local localPos = localRoot.Position
     local localTeam = LocalPlayer.Team
     
-    -- 直接遍历玩家，避免复杂逻辑
+    -- 直接遍历玩家，使用简单条件判断
     for _, player in ipairs(Players:GetPlayers()) do
         -- 跳过自己
-        if player == LocalPlayer then goto continue end
-        
-        -- 跳过无效玩家
-        if not player.Character then goto continue end
-        
-        local character = player.Character
-        
-        -- 跳过死亡玩家
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then goto continue end
-        
-        -- 跳过没有必要部件的玩家
-        local root = character:FindFirstChild("HumanoidRootPart")
-        local head = character:FindFirstChild("Head")
-        if not root or not head then goto continue end
-        
-        -- 团队检查
-        if main.teamcheck and player.Team == localTeam then goto continue end
-        
-        -- 好友检查
-        if main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then goto continue end
-        
-        -- 计算距离
-        local distance = (root.Position - localPos).Magnitude
-        if distance < closestDistance then
-            closestHead = head
-            closestDistance = distance
+        if player == LocalPlayer then
+            -- 继续下一个玩家
+        else
+            -- 检查玩家是否有效
+            if player and player.Character then
+                local character = player.Character
+                
+                -- 检查角色部件
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                local root = character:FindFirstChild("HumanoidRootPart")
+                local head = character:FindFirstChild("Head")
+                
+                if humanoid and humanoid.Health > 0 and root and head then
+                    -- 团队检查
+                    local skip = false
+                    if main.teamcheck and player.Team == localTeam then
+                        skip = true
+                    end
+                    
+                    -- 好友检查
+                    if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
+                        skip = true
+                    end
+                    
+                    if not skip then
+                        -- 计算距离
+                        local distance = (root.Position - localPos).Magnitude
+                        if distance < closestDistance then
+                            closestHead = head
+                            closestDistance = distance
+                        end
+                    end
+                end
+            end
         end
-        
-        ::continue::
     end
     
     return closestHead
@@ -183,28 +188,16 @@ MainSection = Window:Section({
 
 Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
--- 修复初始化按钮显示问题
-local initButton
-initButton = Main:Button({
+-- 初始化按钮
+local initButton = Main:Button({
     Title = "初始化子弹追踪",
     Image = "bird",
     Callback = function()
         initializeAimBot()
         if main.initialized then
-            -- 尝试直接修改按钮属性
-            pcall(function()
-                initButton.Title = "已初始化"
-                initButton:SetDisabled(true)
-            end)
-            
-            -- 如果上面的方法失败，尝试重新创建按钮
-            if not initButton then
-                initButton = Main:Button({
-                    Title = "已初始化",
-                    Image = "bird",
-                    Disabled = true
-                })
-            end
+            -- 简单的按钮状态更新
+            initButton.Text = "已初始化"
+            initButton.Disabled = true
         end
     end
 })
