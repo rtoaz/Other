@@ -20,7 +20,12 @@ local main = {
 -- 视觉容器
 local visualBeams = {}
 local visualSpheres = {}
+local bulletLines = {} -- 新增：子弹轨迹线
 local fovCircle
+
+-- 新增：集束目标点
+local targetPosition = nil
+local activeBullets = {} -- 追踪活跃子弹
 
 -- ======== 调试打印 ========
 local function debugPrint(...)
@@ -31,7 +36,8 @@ end
 local function clearVisuals()
     for _, v in ipairs(visualBeams) do if v and v.Parent then v:Destroy() end end
     for _, v in ipairs(visualSpheres) do if v and v.Parent then v:Destroy() end end
-    visualBeams, visualSpheres = {}, {}
+    for _, v in ipairs(bulletLines) do if v and v.Parent then v:Destroy() end end
+    visualBeams, visualSpheres, bulletLines = {}, {}, {}
 end
 
 -- ======== 摄像机中心判断 ========
@@ -73,40 +79,90 @@ local function getClosestHead()
     return closest
 end
 
--- ======== Beam / Sphere ========
+-- ======== 新增：子弹检测函数 ========
+local function isBullet(part)
+    if not part:IsA("BasePart") then return false end
+    
+    -- 检测子弹的常见特征
+    local isProjectile = part.Velocity.Magnitude > 50 -- 高速移动
+    local nameMatch = string.find(part.Name:lower(), "bullet") or 
+                     string.find(part.Name:lower(), "shot") or
+                     string.find(part.Name:lower(), "projectile") or
+                     string.find(part.Name:lower(), "ammo")
+    
+    return isProjectile and (nameMatch or part.Size.Magnitude < 2) -- 小物体
+end
+
+-- ======== 新增：子弹轨迹修改 ========
+local function modifyBulletTrajectory(bullet)
+    if not targetPosition or not bullet.Parent then return end
+    
+    local currentPos = bullet.Position
+    local targetDir = (targetPosition - currentPos).Unit
+    local originalSpeed = bullet.Velocity.Magnitude
+    
+    -- 计算新的速度方向（指向集束点）
+    local newVelocity = targetDir * originalSpeed
+    
+    -- 应用新的轨迹
+    bullet.Velocity = newVelocity
+    
+    -- 显示子弹轨迹线
+    if main.showLine then
+        local beam = Instance.new("Part")
+        beam.Size = Vector3.new(0.1, 0.1, (currentPos - targetPosition).Magnitude)
+        beam.Material = Enum.Material.Neon
+        beam.Color = Color3.new(1, 0, 0) -- 红色轨迹线
+        beam.Anchored = true
+        beam.CanCollide = false
+        beam.CFrame = CFrame.lookAt(currentPos, targetPosition) * CFrame.new(0, 0, -beam.Size.Z/2)
+        beam.Parent = Workspace
+        
+        table.insert(bulletLines, beam)
+        
+        -- 2秒后清除轨迹线
+        task.delay(2, function()
+            if beam and beam.Parent then
+                beam:Destroy()
+            end
+        end)
+    end
+end
+
+-- ======== 更新视觉显示（集束版） ========
 local function updateVisualsForTarget(targetHead)
     clearVisuals()
-    if not targetHead then return end
+    if not targetHead then 
+        targetPosition = nil
+        return 
+    end
+
+    -- 设置集束目标点（头部稍微向上偏移）
+    targetPosition = targetHead.Position + Vector3.new(0, 0.3, 0)
 
     if main.showLine then
-        local originPart = Instance.new("Part")
-        originPart.Size = Vector3.new(0.1, 0.1, 0.1)
-        originPart.Transparency = 1
-        originPart.Anchored = true
-        originPart.CanCollide = false
-        originPart.CFrame = Camera.CFrame * CFrame.new(0, 0, -1)
-        originPart.Parent = Workspace
-
-        local att0 = Instance.new("Attachment", originPart)
-        local att1 = Instance.new("Attachment", targetHead)
-        local beam = Instance.new("Beam")
-        beam.Attachment0 = att0
-        beam.Attachment1 = att1
-        beam.FaceCamera = true
-        beam.Width0, beam.Width1 = 0.06, 0.06
-        beam.Color = ColorSequence.new(Color3.new(1, 1, 1))
-        beam.Parent = originPart
-        table.insert(visualBeams, originPart)
+        -- 显示从相机到集束点的引导线
+        local origin = Camera.CFrame.Position
+        local beamPart = Instance.new("Part")
+        beamPart.Size = Vector3.new(0.1, 0.1, (origin - targetPosition).Magnitude)
+        beamPart.Material = Enum.Material.Neon
+        beamPart.Color = Color3.new(0, 1, 0) -- 绿色引导线
+        beamPart.Anchored = true
+        beamPart.CanCollide = false
+        beamPart.CFrame = CFrame.lookAt(origin, targetPosition) * CFrame.new(0, 0, -beamPart.Size.Z/2)
+        beamPart.Parent = Workspace
+        table.insert(visualBeams, beamPart)
     end
 
     if main.showSphere then
+        -- 显示集束目标点标记
         local s = Instance.new("Part")
         s.Shape = Enum.PartType.Ball
-        s.Size = Vector3.new(0.4, 0.4, 0.4)
+        s.Size = Vector3.new(0.6, 0.6, 0.6) -- 稍大的球体
         s.Anchored, s.CanCollide = true, false
         s.Material = Enum.Material.Neon
-        s.Color = Color3.new(1, 1, 1)
-        s.CFrame = CFrame.new(targetHead.Position)
+        s.Color = Color3.new(1, 0, 0) -- 红色表示集束点
+        s.CFrame = CFrame.new(targetPosition)
         s.Parent = Workspace
         table.insert(visualSpheres, s)
     end
@@ -154,53 +210,79 @@ local function updateFOVCircle()
     fovCircle.UIStroke.Color = main.fovColor
 end
 
+-- ======== 新增：子弹监控系统 ========
+local function setupBulletMonitoring()
+    local connection
+    connection = Workspace.DescendantAdded:Connect(function(descendant)
+        if not main.enable or not isBullet(descendant) then return end
+        
+        -- 等待子弹完全初始化
+        task.wait(0.02)
+        
+        if math.random(1,100) <= main.hitChance then
+            -- 将子弹加入活跃列表
+            table.insert(activeBullets, descendant)
+            
+            -- 为子弹添加销毁监听
+            descendant.AncestryChanged:Connect(function()
+                for i, bullet in ipairs(activeBullets) do
+                    if bullet == descendant then
+                        table.remove(activeBullets, i)
+                        break
+                    end
+                end
+            end)
+        end
+    end)
+    
+    return connection
+end
+
+-- ======== 主循环（集束版） ========
+local bulletMonitor = setupBulletMonitoring()
+
 RunService.RenderStepped:Connect(function()
     updateFOVCircle()
 
     if not main.enable then
-        if #visualBeams > 0 or #visualSpheres > 0 then clearVisuals() end
+        if #visualBeams > 0 or #visualSpheres > 0 then 
+            clearVisuals() 
+        end
+        targetPosition = nil
+        activeBullets = {}
         return
     end
 
+    -- 更新集束目标点
     local target = getClosestHead()
     if target then
-        if main.showSphere and #visualSpheres > 0 and visualSpheres[1] then
-            visualSpheres[1].CFrame = CFrame.new(target.Position)
+        if targetPosition then
+            -- 平滑更新目标点位置
+            targetPosition = targetPosition:Lerp(target.Position + Vector3.new(0, 0.3, 0), 0.3)
+        else
+            targetPosition = target.Position + Vector3.new(0, 0.3, 0)
         end
-        if main.showLine and #visualBeams > 0 then
-            for _, o in ipairs(visualBeams) do
-                if o and o.Parent then o.CFrame = Camera.CFrame * CFrame.new(0,0,-1) end
-            end
+        updateVisualsForTarget(target)
+    else
+        targetPosition = nil
+        clearVisuals()
+    end
+
+    -- 更新活跃子弹轨迹（实现集束效果）
+    for i = #activeBullets, 1, -1 do
+        local bullet = activeBullets[i]
+        if bullet and bullet.Parent and targetPosition then
+            modifyBulletTrajectory(bullet)
+        else
+            table.remove(activeBullets, i)
         end
     end
 end)
 
--- ======== Hook metamethod (Raycast) ========
-local old
-old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod and getnamecallmethod() or ""
-    if method == "Raycast" and self == Workspace and main.enable then
-        if math.random(1,100) <= main.hitChance then
-            local head = getClosestHead()
-            if head then
-                updateVisualsForTarget(head)
-                return {
-                    Instance = head,
-                    Position = head.Position,
-                    Normal = Vector3.new(0, 1, 0),
-                    Material = Enum.Material.Plastic,
-                    Distance = (Camera.CFrame.Position - head.Position).Magnitude
-                }
-            end
-        end
-    end
-    return old(self, ...)
-end))
-
 -- ======== UI (WindUI) ========
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 local Window = WindUI:CreateWindow({
-    Title = "子弹追踪",
+    Title = "子弹集束追踪",
     Icon = "rbxassetid://129260712070622",
     IconThemed = true,
     Folder = "CloudHub",
@@ -213,45 +295,72 @@ local MainSection = Window:Section({ Title = "子追", Opened = true })
 local Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
 Main:Toggle({
-    Title = "开启子弹追踪",
+    Title = "开启子弹集束",
     Image = "bird",
     Value = false,
-    Callback = function(s) main.enable = s; if not s then clearVisuals() end end
+    Callback = function(s) 
+        main.enable = s; 
+        if not s then 
+            clearVisuals() 
+            targetPosition = nil
+            activeBullets = {}
+        end
+    end
 })
+
 Main:Toggle({
     Title = "开启队伍验证",
     Image = "bird",
     Value = false,
     Callback = function(s) main.teamcheck = s end
 })
+
 Main:Toggle({
     Title = "开启好友验证",
     Image = "bird",
     Value = false,
     Callback = function(s) main.friendcheck = s end
 })
+
 Main:Slider({
     Title = "命中率 (%)",
     Value = {Min=0, Max=100, Default=100},
     Callback = function(v) main.hitChance = v end
 })
+
 Main:Slider({
     Title = "中心角度 (度)",
     Value = {Min=0, Max=45, Default=10},
     Callback = function(v) main.centerAngle = v end
 })
+
 Main:Toggle({
-    Title = "显示目标连线 (Beam)",
+    Title = "显示子弹轨迹线",
     Image = "line",
     Value = false,
-    Callback = function(s) main.showLine = s; if not s then clearVisuals() end end
+    Callback = function(s) 
+        main.showLine = s; 
+        if not s then 
+            for _, v in ipairs(visualBeams) do if v and v.Parent then v:Destroy() end end
+            for _, v in ipairs(bulletLines) do if v and v.Parent then v:Destroy() end end
+            visualBeams, bulletLines = {}, {}
+        end
+    end
 })
+
 Main:Toggle({
-    Title = "显示目标标记球",
+    Title = "显示集束目标点",
     Image = "circle",
     Value = false,
-    Callback = function(s) main.showSphere = s; if not s then clearVisuals() end end
+    Callback = function(s) 
+        main.showSphere = s; 
+        if not s then 
+            for _, v in ipairs(visualSpheres) do if v and v.Parent then v:Destroy() end end
+            visualSpheres = {}
+        end
+    end
 })
+
 Main:Toggle({
     Title = "显示FOV圆圈",
     Image = "circle",
@@ -261,6 +370,7 @@ Main:Toggle({
         if s then createFOVCircle() else if fovCircle then fovCircle.Visible=false end end
     end
 })
+
 Main:Colorpicker({
     Title = "FOV颜色选择器",
     Default = Color3.fromRGB(255, 255, 255),
@@ -271,3 +381,10 @@ Main:Colorpicker({
         end
     end
 })
+
+-- 清理函数
+game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
+    clearVisuals()
+    targetPosition = nil
+    activeBullets = {}
+end)
