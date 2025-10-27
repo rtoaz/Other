@@ -13,14 +13,14 @@ local main = {
 
 -- 伪装实例属性访问
 local function createProxy(instance)
-    if not instance then return nil end
     local proxy = newproxy(true)
     local mt = getmetatable(proxy)
     
     mt.__index = function(_, key)
         -- 拦截敏感属性访问
         if key == "Position" or key == "CFrame" or key == "Health" then
-            -- 注意：已移除 yield/wait，避免在属性访问时让出线程导致输入/相机卡住
+            -- 随机延迟以模拟正常访问
+            wait(math.random(0.001, 0.005))
             return instance[key]
         end
         return instance[key]
@@ -38,17 +38,15 @@ local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
     
-    if not (LocalPlayer and LocalPlayer.Character) then
+    if not LocalPlayer.Character then
         return
     end
     
-    local localRootInst = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not localRootInst then
+    local localRoot = createProxy(LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
+    if not localRoot then
         return
     end
-    -- 仅在必要时包装 proxy，避免在循环里频繁创建
-    local localRoot = localRootInst
-
+    
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local skip = false
@@ -63,21 +61,18 @@ local function getClosestHead()
             
             if not skip then
                 local character = player.Character
-                local rootInst = character:FindFirstChild("HumanoidRootPart")
-                local headInst = character:FindFirstChild("Head")
-                local humanoidInst = character:FindFirstChildOfClass("Humanoid")
+                local root = createProxy(character:FindFirstChild("HumanoidRootPart"))
+                local head = createProxy(character:FindFirstChild("Head"))
+                local humanoid = createProxy(character:FindFirstChildOfClass("Humanoid"))
                 
-                if rootInst and headInst and humanoidInst and humanoidInst.Health and humanoidInst.Health > 0 then
+                if root and head and humanoid and humanoid.Health > 0 then
                     -- 检查是否在摄像机视角内
-                    local screenPos, onScreen = Camera:WorldToViewportPoint(headInst.Position)
-                    -- WorldToViewportPoint 返回 (Vector3 screenPoint, boolean onScreen)
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
                     if onScreen and screenPos.Z > 0 and screenPos.X > 0 and screenPos.X < Camera.ViewportSize.X and screenPos.Y > 0 and screenPos.Y < Camera.ViewportSize.Y then
                         -- 仅计算视野内玩家
-                        local ok, distance = pcall(function()
-                            return (rootInst.Position - localRoot.Position).Magnitude
-                        end)
-                        if ok and distance and distance < closestDistance then
-                            closestHead = headInst
+                        local distance = (root.Position - localRoot.Position).Magnitude
+                        if distance < closestDistance then
+                            closestHead = head
                             closestDistance = distance
                         end
                     end
@@ -95,7 +90,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local args = {...}
     
     if method == "Raycast" and not checkcaller() and main.enable and main.hookMode == "Raycast" then
-        local origin = args[1] or (Camera and Camera.CFrame and Camera.CFrame.Position) or Vector3.new()
+        local origin = args[1] or Camera.CFrame.Position
         local closestHead = getClosestHead()
         
         if closestHead then
@@ -103,9 +98,9 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             return {
                 Instance = closestHead,
                 Position = closestHead.Position + Vector3.new(
-                    (math.random(-100,100) * 0.001),
-                    (math.random(-100,100) * 0.001),
-                    (math.random(-100,100) * 0.001)
+                    math.random(-0.1, 0.1),
+                    math.random(-0.1, 0.1),
+                    math.random(-0.1, 0.1)
                 ), -- 轻微随机偏移
                 Normal = (origin - closestHead.Position).Unit,
                 Material = Enum.Material.Plastic,
@@ -150,9 +145,9 @@ end))
 -- 拦截 __index 元方法以绕过属性检测
 oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
     if not checkcaller() and (key == "Position" or key == "CFrame" or key == "Health") then
-        -- 伪装属性访问（移除会让出线程的操作）
+        -- 伪装属性访问
         local proxy = createProxy(self)
-        return proxy and proxy[key]
+        return proxy[key]
     end
     return oldIndex(self, key)
 end))
@@ -183,8 +178,8 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("DA70D6"),
-        Color3.fromHex("9932CC")
+        Color3.fromHex("9400D3"),
+        Color3.fromHex("8A2BE2")
     ),
     Draggable = true,
 })
@@ -228,7 +223,7 @@ Main:Toggle({
 
 -- 下拉菜单：选择拦截类型（不可多选，默认 Raycast）
 Main:Dropdown({
-    Title = "下拉菜单",
+    Title = "模式",
     Values = { "Raycast", "Ray.new" },
     Value = "Raycast", -- 默认值
     Multi = false, -- 是否多选
@@ -250,15 +245,10 @@ local function antiDetect()
     end
     
     -- 伪装正常玩家行为
-    if LocalPlayer and LocalPlayer.Character then
+    if LocalPlayer.Character then
         local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
         if humanoid then
-            -- 暂停对 WalkSpeed 的写入以避免误写导致移动/视角异常
-            -- local ok, current = pcall(function() return tonumber(humanoid.WalkSpeed) end)
-            -- if ok and current then
-            --     local delta = (math.random(-10,10) * 0.01) -- 安全小幅度变动
-            --     pcall(function() humanoid.WalkSpeed = current + delta end)
-            -- end
+            humanoid.WalkSpeed = humanoid.WalkSpeed + math.random(-0.1, 0.1)
         end
     end
 end
