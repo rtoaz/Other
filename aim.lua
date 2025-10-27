@@ -8,45 +8,48 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    hitrate = 100,    -- 命中率 0-100，默认 100
-    drawLine = false, -- 是否绘制连线（默认关闭）
-    drawCircle = false -- 是否绘制头部圆（默认关闭）
+    hitChance = 100,     -- 命中率 0-100
+    showLine = false,    -- 绘制连线（Beam）
+    showSphere = false,  -- 绘制头部球（Part）
+    centerAngle = 10     -- 允许的角度偏差（度），目标必须在摄像机中心 +/- centerAngle 度内
 }
 
--- Drawing 支持检测与对象（可能在不同执行环境不可用）
-local DrawingAvailable = false
-local lineDrawing, circleDrawing = nil, nil
-do
-    local ok, _ = pcall(function()
-        local tline = Drawing.new("Line")
-        tline:Remove()
-    end)
-    DrawingAvailable = ok
-    if DrawingAvailable then
-        lineDrawing = Drawing.new("Line")
-        circleDrawing = Drawing.new("Circle")
+-- 存放用于视觉的实例
+local visualBeams = {}
+local visualSpheres = {}
 
-        -- 线设置（白色），默认隐藏
-        lineDrawing.Color = Color3.new(1,1,1)
-        lineDrawing.Thickness = 2
-        lineDrawing.Transparency = 1
-        lineDrawing.Visible = false
-
-        -- 圆设置（白色，空心），默认隐藏
-        circleDrawing.Radius = 8 -- 屏幕像素半径（适中大小）
-        circleDrawing.Filled = false
-        circleDrawing.Color = Color3.new(1,1,1)
-        circleDrawing.Thickness = 2
-        circleDrawing.Transparency = 1
-        circleDrawing.Visible = false
-    else
-        warn("[BulletTracer] Drawing API not available — visuals disabled.")
+-- 清理视觉对象
+local function clearVisuals()
+    for _, v in ipairs(visualBeams) do
+        if v and v.Parent then v:Destroy() end
     end
+    visualBeams = {}
+
+    for _, v in ipairs(visualSpheres) do
+        if v and v.Parent then v:Destroy() end
+    end
+    visualSpheres = {}
 end
 
--- 获取最近的头部（仅限摄像机可见范围内）
+-- 判断部件是否在摄像机中心附近（基于角度阈值）
+local function isNearCameraCenter(part, angleDeg)
+    if not part or not Camera or not Camera.CFrame then return false end
+    local camCF = Camera.CFrame
+    local camPos = camCF.Position
+    local look = camCF.LookVector
+
+    local dir = part.Position - camPos
+    local mag = dir.Magnitude
+    if mag <= 0 then return false end
+
+    local dot = look:Dot(dir.Unit) -- cos(theta)
+    local threshold = math.cos(math.rad(math.max(0, math.min(89.9, angleDeg))))
+    return dot >= threshold
+end
+
+-- 获取最近的头部（只考虑摄像机中心附近的玩家）
 local function getClosestHead()
-    local closestHead
+    local closestHead = nil
     local closestDistance = math.huge
 
     if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
@@ -56,30 +59,30 @@ local function getClosestHead()
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local skip = false
-
             if main.teamcheck and player.Team == LocalPlayer.Team then
                 skip = true
             end
-
             if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
                 skip = true
             end
 
             if not skip then
-                local character = player.Character
-                local root = character:FindFirstChild("HumanoidRootPart")
-                local head = character:FindFirstChild("Head")
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                local char = player.Character
+                local root = char:FindFirstChild("HumanoidRootPart")
+                local head = char:FindFirstChild("Head")
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    -- 判断头部是否在摄像机视野内
-                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                    if onScreen and screenPos.Z > 0 then
-                        -- 距离检测（使用 root 到本地 root 的距离）
-                        local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                        if distance < closestDistance then
-                            closestHead = head
-                            closestDistance = distance
+                    -- 先判断是否位于摄像机中心附近（角度判断）
+                    if isNearCameraCenter(head, main.centerAngle) then
+                        -- 再判断是否在摄像机视锥内（可选但更安全）
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                        if onScreen and screenPos.Z > 0 then
+                            local dist = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+                            if dist < closestDistance then
+                                closestDistance = dist
+                                closestHead = head
+                            end
                         end
                     end
                 end
@@ -90,10 +93,82 @@ local function getClosestHead()
     return closestHead
 end
 
--- 模拟正常Raycast的函数（备用）
+-- 更新/绘制视觉效果（Beam + Sphere，根据开关）
+local function updateVisualsForTarget(targetHead)
+    clearVisuals()
+    if not targetHead then return end
+
+    if main.showLine then
+        -- Beam 需要两个 Attachment：一个放在摄像机（用 Camera 或 屏幕前方创建空Part），另一个放在目标头部
+        -- 为避免在 Camera 上创建 Attachment（某些环境不允许），我们创建一个临时不可见 Part 放于摄像机前方并附加
+        local originPart = Instance.new("Part")
+        originPart.Size = Vector3.new(0.1,0.1,0.1)
+        originPart.Transparency = 1
+        originPart.Anchored = true
+        originPart.CanCollide = false
+        originPart.CFrame = Camera.CFrame * CFrame.new(0,0,-1) -- 摄像机前方一点
+        originPart.Parent = Workspace
+
+        local att0 = Instance.new("Attachment", originPart)
+        local att1 = Instance.new("Attachment", targetHead)
+
+        local beam = Instance.new("Beam")
+        beam.Attachment0 = att0
+        beam.Attachment1 = att1
+        beam.FaceCamera = true
+        beam.Width0 = 0.06
+        beam.Width1 = 0.06
+        beam.Color = ColorSequence.new(Color3.new(1,1,1))
+        beam.LightEmission = 1
+        beam.Parent = originPart -- 父级可放 Workspace，beam 会跟随
+        table.insert(visualBeams, originPart) -- 保存 originPart（包含 beam）
+    end
+
+    if main.showSphere then
+        local sphere = Instance.new("Part")
+        sphere.Shape = Enum.PartType.Ball
+        sphere.Size = Vector3.new(0.4,0.4,0.4)
+        sphere.Anchored = true
+        sphere.CanCollide = false
+        sphere.Material = Enum.Material.Neon
+        sphere.Color = Color3.new(1,1,1)
+        sphere.CFrame = CFrame.new(targetHead.Position)
+        sphere.Parent = Workspace
+        table.insert(visualSpheres, sphere)
+    end
+end
+
+-- 将视觉对象随目标位置更新（每帧）
+RunService.RenderStepped:Connect(function()
+    if not main.enable then
+        -- 如果关闭则清理视觉并返回
+        if #visualBeams > 0 or #visualSpheres > 0 then
+            clearVisuals()
+        end
+        return
+    end
+
+    -- 如果显示球，则把球位置同步到目标头部
+    if main.showSphere and #visualSpheres > 0 then
+        local target = getClosestHead()
+        if target and visualSpheres[1] and visualSpheres[1].Parent then
+            visualSpheres[1].CFrame = CFrame.new(target.Position)
+        end
+    end
+
+    -- 对于 beam 的 originPart 我们也需要不断更新其位置到摄像机前方
+    if main.showLine and #visualBeams > 0 then
+        for _, originPart in ipairs(visualBeams) do
+            if originPart and originPart.Parent then
+                originPart.CFrame = Camera.CFrame * CFrame.new(0,0,-1)
+            end
+        end
+    end
+end)
+
+-- 备用 Raycast wrapper（如果原始返回 nil 则提供默认结构）
 local function simulateRaycast(origin, direction, params)
     local result = Workspace:Raycast(origin, direction, params)
-
     return result or {
         Instance = nil,
         Position = origin + direction,
@@ -103,103 +178,62 @@ local function simulateRaycast(origin, direction, params)
     }
 end
 
--- ========== 修复点在这里 ==========
--- 我移除了对 checkcaller() 的检查，保证当 main.enable 为 true 时我们会尝试注入命中
--- 仍然保留命中率、队伍/好友/可见性校验
--- =================================
-
-local oldRaycast
-oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, raycastParams)
+-- Hook Raycast：在 main.enable 时尝试注入命中
+local oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, raycastParams)
     if main.enable then
-        -- 尝试获取摄像机可见的最近头部
-        local closestHead = getClosestHead()
+        -- 命中率判定
+        local roll = math.random(1, 100)
+        if roll <= math.clamp(main.hitChance, 0, 100) then
+            local targetHead = getClosestHead()
+            if targetHead then
+                -- 更新视觉（如果开启）
+                updateVisualsForTarget(targetHead)
 
-        if closestHead then
-            local headPos = closestHead.Position
-            local distance = (headPos - origin).Magnitude
-            local diff = origin - headPos
-            local normalDirection = diff.Magnitude > 0 and diff.Unit or Vector3.new(0, 1, 0)
+                local headPos = targetHead.Position
+                local diff = origin - headPos
+                local normal = (diff.Magnitude > 0) and diff.Unit or Vector3.new(0,1,0)
+                local dist = (headPos - origin).Magnitude
 
-            -- 命中率控制（0-100）
-            local roll = math.random(1, 100)
-            if roll <= math.clamp(main.hitrate, 0, 100) then
-                -- 模拟命中头部，加入轻微偏移（减少检测风险）
                 return {
-                    Instance = closestHead,
-                    Position = headPos + Vector3.new(
-                        (math.random() - 0.5) * 0.2,
-                        (math.random() - 0.5) * 0.2,
-                        (math.random() - 0.5) * 0.2
-                    ),
-                    Normal = normalDirection,
+                    Instance = targetHead,
+                    Position = headPos + Vector3.new((math.random() - 0.5) * 0.2, (math.random() - 0.5) * 0.2, (math.random() - 0.5) * 0.2),
+                    Normal = normal,
                     Material = Enum.Material.Plastic,
-                    Distance = distance
+                    Distance = dist
                 }
             end
         end
     end
 
-    -- 否则调用原本的 Raycast 行为
     local result = oldRaycast(self, origin, direction, raycastParams)
     return result or simulateRaycast(origin, direction, raycastParams)
 end)
 
--- UI部分（WindUI），并加入命中率滑块与视觉开关（默认关闭）
+-- UI（WindUI）
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-
 local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
     Icon = "rbxassetid://129260712070622",
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 420),
+    Size = UDim2.fromOffset(320, 460),
     Transparent = true,
     Theme = "Dark",
-    User = {
-        Enabled = true,
-        Callback = function()
-            print("clicked")
-        end,
-        Anonymous = false
-    },
-    SideBarWidth = 200,
-    ScrollBarEnabled = true,
 })
 
-Window:EditOpenButton({
-    Title = "打开UI",
-    Icon = "monitor",
-    CornerRadius = UDim.new(0, 16),
-    StrokeThickness = 2,
-    Color = ColorSequence.new(
-        Color3.fromHex("FF0F7B"),
-        Color3.fromHex("F89B29")
-    ),
-    Draggable = true,
-})
+local MainSection = Window:Section({ Title = "子追", Opened = true })
+local Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
-MainSection = Window:Section({
-    Title = "子追",
-    Opened = true,
-})
-
-Main = MainSection:Tab({
-    Title = "设置",
-    Icon = "Sword"
-})
-
--- 使用你指定的“正确句式”，默认都是 false
+-- 基本开关
 Main:Toggle({
     Title = "开启子弹追踪",
     Image = "bird",
     Value = false,
     Callback = function(state)
         main.enable = state
-        -- 关闭时立即隐藏视觉元素
-        if not state and DrawingAvailable then
-            lineDrawing.Visible = false
-            circleDrawing.Visible = false
+        if not state then
+            clearVisuals()
         end
     end
 })
@@ -228,82 +262,39 @@ Main:Slider({
     Value = { Min = 0, Max = 100, Default = 100 },
     Callback = function(Value)
         local v = tonumber(Value) or 100
-        if v < 0 then v = 0 end
-        if v > 100 then v = 100 end
-        main.hitrate = v
-        print("命中率已设置为:", main.hitrate)
+        main.hitChance = math.clamp(v, 0, 100)
+        print("命中率已设置为:", main.hitChance)
     end
 })
 
--- 绘图开关（默认关闭）
+-- 视中心角度滑块（只锁定摄像机中心 ± angle 度内的玩家）
+Main:Slider({
+    Title = "中心角度 (度)",
+    Value = { Min = 0, Max = 45, Default = 10 },
+    Callback = function(Value)
+        local v = tonumber(Value) or 10
+        main.centerAngle = math.clamp(v, 0, 45)
+        print("中心角度已设置为:", main.centerAngle)
+    end
+})
+
+-- 可视化开关
 Main:Toggle({
-    Title = "显示连线",
+    Title = "显示目标连线 (Beam)",
     Image = "line",
     Value = false,
     Callback = function(state)
-        main.drawLine = state
-        if DrawingAvailable and not state then
-            lineDrawing.Visible = false
-        end
-        if not DrawingAvailable and state then
-            warn("[BulletTracer] Drawing API not available — cannot show line.")
-        end
+        main.showLine = state
+        if not state then clearVisuals() end
     end
 })
 
 Main:Toggle({
-    Title = "显示目标圈",
+    Title = "显示目标标记球",
     Image = "circle",
     Value = false,
     Callback = function(state)
-        main.drawCircle = state
-        if DrawingAvailable and not state then
-            circleDrawing.Visible = false
-        end
-        if not DrawingAvailable and state then
-            warn("[BulletTracer] Drawing API not available — cannot show circle.")
-        end
+        main.showSphere = state
+        if not state then clearVisuals() end
     end
 })
-
--- 可视化更新循环（使用 RenderStepped）
-local function updateVisuals()
-    if not DrawingAvailable then
-        return
-    end
-
-    RunService.RenderStepped:Connect(function()
-        -- 先默认隐藏
-        lineDrawing.Visible = false
-        circleDrawing.Visible = false
-
-        if not main.enable then
-            return
-        end
-
-        local targetHead = getClosestHead()
-        if targetHead and targetHead.Parent then
-            local screenPos, onScreen = Camera:WorldToViewportPoint(targetHead.Position)
-            if onScreen and screenPos.Z > 0 then
-                local screenX, screenY = screenPos.X, screenPos.Y
-                local centerX = Camera.ViewportSize.X / 2
-                local centerY = Camera.ViewportSize.Y / 2
-
-                if main.drawLine then
-                    lineDrawing.From = Vector2.new(centerX, centerY)
-                    lineDrawing.To = Vector2.new(screenX, screenY)
-                    lineDrawing.Visible = true
-                end
-
-                if main.drawCircle then
-                    circleDrawing.Position = Vector2.new(screenX, screenY)
-                    circleDrawing.Visible = true
-                end
-            end
-        end
-    end)
-end
-
-if DrawingAvailable then
-    updateVisuals()
-end
