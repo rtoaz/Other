@@ -56,7 +56,7 @@ local function computeClosestHead()
     local closestHead
     local closestDistance = math.huge
 
-    if not LocalPlayer.Character then return nil end
+    if not LocalPlayer.Character 键，然后 return nil end
     local localRoot = safeCall(function() return LocalPlayer.Character:FindFirstChild("HumanoidRootPart") end)
     if not localRoot then return nil end
     local localPos = localRoot.Position
@@ -82,7 +82,7 @@ local function computeClosestHead()
                 local head = character:FindFirstChild("Head")
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-                if root and head and humanoid and humanoid.Health > 0 then
+                if root 和 head and humanoid and humanoid.Health > 0 键，然后
                     local distance = (root.Position - localPos).Magnitude
                     if distance < closestDistance then
                         closestHead = head
@@ -96,7 +96,7 @@ local function computeClosestHead()
 end
 
 local function getClosestHead(force)
-    local now = tick()
+    local 现在 = tick()
     if not force and cachedHead and (now - lastUpdateTime) < (1 / TARGET_UPDATE_RATE) then
         return cachedHead
     end
@@ -127,7 +127,7 @@ local lastIntercept = 0
 local INTERCEPT_MIN_INTERVAL = 1 / 60 -- 最多每秒拦截 60 次（可调：降低到 30 或更少）
 local ORIGIN_EPSILON = 0.5 -- origin 与 Camera 位置差距允许值（米）
 
-if hookmetamethod then
+if hookmetamethod 键，然后
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
         local args = {...}
@@ -148,8 +148,8 @@ if hookmetamethod then
             end
 
             -- 限制拦截频率，避免热路径过于频繁
-            local now = tick()
-            if now - lastIntercept < INTERCEPT_MIN_INTERVAL then
+            local 现在 = tick()
+            if 现在 - lastIntercept < INTERCEPT_MIN_INTERVAL then
                 return oldNamecall(self, ...)
             end
             lastIntercept = now
@@ -218,15 +218,8 @@ else
     warn("hookmetamethod not supported by this executor")
 end
 
--- 加载 UI
-local success, WindUI = pcall(function()
-    return loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-end)
-if not success then
-    warn("Failed to load WindUI: " .. tostring(WindUI))
-    return
-end
-
+-- 加载 UI（已按要求保留为简洁两行）
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
     Icon = "rbxassetid://129260712070622",
