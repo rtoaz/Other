@@ -106,7 +106,6 @@ end))
 
 -- 加载 UI
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-
 local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
     Icon = "rbxassetid://129260712070622",
