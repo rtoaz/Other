@@ -20,8 +20,7 @@ local function createProxy(instance)
     mt.__index = function(_, key)
         -- 拦截敏感属性访问
         if key == "Position" or key == "CFrame" or key == "Health" then
-            -- 随机延迟以模拟正常访问
-            wait(math.random(1,5) * 0.001)
+            -- 注意：已移除 yield/wait，避免在属性访问时让出线程导致输入/相机卡住
             return instance[key]
         end
         return instance[key]
@@ -39,15 +38,17 @@ local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
     
-    if not LocalPlayer.Character then
+    if not (LocalPlayer and LocalPlayer.Character) then
         return
     end
     
-    local localRoot = createProxy(LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
-    if not localRoot then
+    local localRootInst = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not localRootInst then
         return
     end
-    
+    -- 仅在必要时包装 proxy，避免在循环里频繁创建
+    local localRoot = localRootInst
+
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local skip = false
@@ -62,20 +63,21 @@ local function getClosestHead()
             
             if not skip then
                 local character = player.Character
-                local root = createProxy(character:FindFirstChild("HumanoidRootPart"))
-                local head = createProxy(character:FindFirstChild("Head"))
-                local humanoid = createProxy(character:FindFirstChildOfClass("Humanoid"))
+                local rootInst = character:FindFirstChild("HumanoidRootPart")
+                local headInst = character:FindFirstChild("Head")
+                local humanoidInst = character:FindFirstChildOfClass("Humanoid")
                 
-                if root and head and humanoid and humanoid.Health and humanoid.Health > 0 then
+                if rootInst and headInst and humanoidInst and humanoidInst.Health and humanoidInst.Health > 0 then
                     -- 检查是否在摄像机视角内
-                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(headInst.Position)
+                    -- WorldToViewportPoint 返回 (Vector3 screenPoint, boolean onScreen)
                     if onScreen and screenPos.Z > 0 and screenPos.X > 0 and screenPos.X < Camera.ViewportSize.X and screenPos.Y > 0 and screenPos.Y < Camera.ViewportSize.Y then
                         -- 仅计算视野内玩家
                         local ok, distance = pcall(function()
-                            return (root.Position - localRoot.Position).Magnitude
+                            return (rootInst.Position - localRoot.Position).Magnitude
                         end)
                         if ok and distance and distance < closestDistance then
-                            closestHead = head
+                            closestHead = headInst
                             closestDistance = distance
                         end
                     end
@@ -148,7 +150,7 @@ end))
 -- 拦截 __index 元方法以绕过属性检测
 oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
     if not checkcaller() and (key == "Position" or key == "CFrame" or key == "Health") then
-        -- 伪装属性访问
+        -- 伪装属性访问（移除会让出线程的操作）
         local proxy = createProxy(self)
         return proxy and proxy[key]
     end
@@ -251,11 +253,12 @@ local function antiDetect()
     if LocalPlayer and LocalPlayer.Character then
         local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
         if humanoid then
-            local ok, current = pcall(function() return tonumber(humanoid.WalkSpeed) end)
-            if ok and current then
-                local delta = (math.random(-10,10) * 0.01) -- 安全小幅度变动
-                pcall(function() humanoid.WalkSpeed = current + delta end)
-            end
+            -- 暂停对 WalkSpeed 的写入以避免误写导致移动/视角异常
+            -- local ok, current = pcall(function() return tonumber(humanoid.WalkSpeed) end)
+            -- if ok and current then
+            --     local delta = (math.random(-10,10) * 0.01) -- 安全小幅度变动
+            --     pcall(function() humanoid.WalkSpeed = current + delta end)
+            -- end
         end
     end
 end
