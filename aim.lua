@@ -178,8 +178,8 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("001F3F"),
-        Color3.fromHex("0074D9")
+        Color3.fromHex("9400D3"),
+        Color3.fromHex("8A2BE2")
     ),
     Draggable = true,
 })
