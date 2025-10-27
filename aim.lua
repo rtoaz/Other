@@ -66,10 +66,15 @@ local function getClosestHead()
                 local humanoid = createProxy(character:FindFirstChildOfClass("Humanoid"))
                 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    local distance = (root.Position - localRoot.Position).Magnitude
-                    if distance < closestDistance then
-                        closestHead = head
-                        closestDistance = distance
+                    -- 检查是否在摄像机视角内
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    if onScreen and screenPos.Z > 0 and screenPos.X > 0 and screenPos.X < Camera.ViewportSize.X and screenPos.Y > 0 and screenPos.Y < Camera.ViewportSize.Y then
+                        -- 仅计算视野内玩家
+                        local distance = (root.Position - localRoot.Position).Magnitude
+                        if distance < closestDistance then
+                            closestHead = head
+                            closestDistance = distance
+                        end
                     end
                 end
             end
