@@ -103,10 +103,15 @@ local function simulateRaycast(origin, direction, params)
     }
 end
 
--- 改写后的Raycast hook（保持原有行为并注入命中逻辑）
+-- ========== 修复点在这里 ==========
+-- 我移除了对 checkcaller() 的检查，保证当 main.enable 为 true 时我们会尝试注入命中
+-- 仍然保留命中率、队伍/好友/可见性校验
+-- =================================
+
 local oldRaycast
 oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, raycastParams)
-    if main.enable and not checkcaller() then
+    if main.enable then
+        -- 尝试获取摄像机可见的最近头部
         local closestHead = getClosestHead()
 
         if closestHead then
@@ -115,10 +120,10 @@ oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, r
             local diff = origin - headPos
             local normalDirection = diff.Magnitude > 0 and diff.Unit or Vector3.new(0, 1, 0)
 
-            -- 命中率控制
+            -- 命中率控制（0-100）
             local roll = math.random(1, 100)
             if roll <= math.clamp(main.hitrate, 0, 100) then
-                -- 模拟命中头部，加入轻微偏移，降低检测风险
+                -- 模拟命中头部，加入轻微偏移（减少检测风险）
                 return {
                     Instance = closestHead,
                     Position = headPos + Vector3.new(
@@ -134,6 +139,7 @@ oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, r
         end
     end
 
+    -- 否则调用原本的 Raycast 行为
     local result = oldRaycast(self, origin, direction, raycastParams)
     return result or simulateRaycast(origin, direction, raycastParams)
 end)
@@ -147,7 +153,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 420), -- 增高以容纳更多控件
+    Size = UDim2.fromOffset(300, 420),
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -183,15 +189,14 @@ Main = MainSection:Tab({
     Icon = "Sword"
 })
 
--- 注意：下面的 Toggle 都使用你提供的“正确句式”，并确保 Value = false（默认关闭）
-
+-- 使用你指定的“正确句式”，默认都是 false
 Main:Toggle({
     Title = "开启子弹追踪",
     Image = "bird",
     Value = false,
     Callback = function(state)
         main.enable = state
-        -- 关闭时确保所有可视化被隐藏
+        -- 关闭时立即隐藏视觉元素
         if not state and DrawingAvailable then
             lineDrawing.Visible = false
             circleDrawing.Visible = false
@@ -230,14 +235,13 @@ Main:Slider({
     end
 })
 
--- 显示连线（默认 false）
+-- 绘图开关（默认关闭）
 Main:Toggle({
     Title = "显示连线",
     Image = "line",
     Value = false,
     Callback = function(state)
         main.drawLine = state
-        -- 立即同步隐藏（显示由渲染循环控制）
         if DrawingAvailable and not state then
             lineDrawing.Visible = false
         end
@@ -247,7 +251,6 @@ Main:Toggle({
     end
 })
 
--- 显示目标圈（默认 false）
 Main:Toggle({
     Title = "显示目标圈",
     Image = "circle",
@@ -269,9 +272,8 @@ local function updateVisuals()
         return
     end
 
-    -- 每帧更新锁定目标并渲染线和圆
     RunService.RenderStepped:Connect(function()
-        -- 先隐藏默认
+        -- 先默认隐藏
         lineDrawing.Visible = false
         circleDrawing.Visible = false
 
@@ -284,18 +286,15 @@ local function updateVisuals()
             local screenPos, onScreen = Camera:WorldToViewportPoint(targetHead.Position)
             if onScreen and screenPos.Z > 0 then
                 local screenX, screenY = screenPos.X, screenPos.Y
-                -- 屏幕中心（从中心连线到目标）
                 local centerX = Camera.ViewportSize.X / 2
                 local centerY = Camera.ViewportSize.Y / 2
 
-                -- 绘制线条（严格依赖两个开关：main.enable 与 main.drawLine）
                 if main.drawLine then
                     lineDrawing.From = Vector2.new(centerX, centerY)
                     lineDrawing.To = Vector2.new(screenX, screenY)
                     lineDrawing.Visible = true
                 end
 
-                -- 绘制头部圆形（严格依赖 main.drawCircle）
                 if main.drawCircle then
                     circleDrawing.Position = Vector2.new(screenX, screenY)
                     circleDrawing.Visible = true
@@ -305,7 +304,6 @@ local function updateVisuals()
     end)
 end
 
--- 启动视觉更新（如果支持）
 if DrawingAvailable then
     updateVisuals()
 end
