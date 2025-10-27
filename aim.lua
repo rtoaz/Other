@@ -8,7 +8,7 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    hitrate = 100, -- 命中率 0-100，默认 100
+    hitrate = 100,    -- 命中率 0-100，默认 100
     drawLine = false, -- 是否绘制连线（默认关闭）
     drawCircle = false -- 是否绘制头部圆（默认关闭）
 }
@@ -26,13 +26,13 @@ do
         lineDrawing = Drawing.new("Line")
         circleDrawing = Drawing.new("Circle")
 
-        -- 线设置（白色）
+        -- 线设置（白色），默认隐藏
         lineDrawing.Color = Color3.new(1,1,1)
         lineDrawing.Thickness = 2
         lineDrawing.Transparency = 1
         lineDrawing.Visible = false
 
-        -- 圆设置（白色，空心）
+        -- 圆设置（白色，空心），默认隐藏
         circleDrawing.Radius = 8 -- 屏幕像素半径（适中大小）
         circleDrawing.Filled = false
         circleDrawing.Color = Color3.new(1,1,1)
@@ -183,13 +183,15 @@ Main = MainSection:Tab({
     Icon = "Sword"
 })
 
+-- 注意：下面的 Toggle 都使用你提供的“正确句式”，并确保 Value = false（默认关闭）
+
 Main:Toggle({
     Title = "开启子弹追踪",
     Image = "bird",
     Value = false,
     Callback = function(state)
         main.enable = state
-        -- 当关闭时隐藏绘图对象（如果存在）
+        -- 关闭时确保所有可视化被隐藏
         if not state and DrawingAvailable then
             lineDrawing.Visible = false
             circleDrawing.Visible = false
@@ -228,31 +230,35 @@ Main:Slider({
     end
 })
 
--- 可视化开关（默认关闭）
+-- 显示连线（默认 false）
 Main:Toggle({
     Title = "显示连线",
     Image = "line",
     Value = false,
     Callback = function(state)
-        main.drawLine = state and true or false
-        if DrawingAvailable then
-            lineDrawing.Visible = false -- 立即隐藏/等待渲染循环决定显示
-        else
-            if state then warn("[BulletTracer] Drawing API not available — cannot show line.") end
+        main.drawLine = state
+        -- 立即同步隐藏（显示由渲染循环控制）
+        if DrawingAvailable and not state then
+            lineDrawing.Visible = false
+        end
+        if not DrawingAvailable and state then
+            warn("[BulletTracer] Drawing API not available — cannot show line.")
         end
     end
 })
 
+-- 显示目标圈（默认 false）
 Main:Toggle({
     Title = "显示目标圈",
     Image = "circle",
     Value = false,
     Callback = function(state)
-        main.drawCircle = state and true or false
-        if DrawingAvailable then
-            circleDrawing.Visible = false -- 立即隐藏/等待渲染循环决定显示
-        else
-            if state then warn("[BulletTracer] Drawing API not available — cannot show circle.") end
+        main.drawCircle = state
+        if DrawingAvailable and not state then
+            circleDrawing.Visible = false
+        end
+        if not DrawingAvailable and state then
+            warn("[BulletTracer] Drawing API not available — cannot show circle.")
         end
     end
 })
@@ -265,11 +271,11 @@ local function updateVisuals()
 
     -- 每帧更新锁定目标并渲染线和圆
     RunService.RenderStepped:Connect(function()
+        -- 先隐藏默认
+        lineDrawing.Visible = false
+        circleDrawing.Visible = false
+
         if not main.enable then
-            if lineDrawing.Visible or circleDrawing.Visible then
-                lineDrawing.Visible = false
-                circleDrawing.Visible = false
-            end
             return
         end
 
@@ -282,32 +288,19 @@ local function updateVisuals()
                 local centerX = Camera.ViewportSize.X / 2
                 local centerY = Camera.ViewportSize.Y / 2
 
-                -- 绘制线条（仅当 drawLine 开启）
+                -- 绘制线条（严格依赖两个开关：main.enable 与 main.drawLine）
                 if main.drawLine then
                     lineDrawing.From = Vector2.new(centerX, centerY)
                     lineDrawing.To = Vector2.new(screenX, screenY)
                     lineDrawing.Visible = true
-                else
-                    lineDrawing.Visible = false
                 end
 
-                -- 绘制头部圆形（仅当 drawCircle 开启）
+                -- 绘制头部圆形（严格依赖 main.drawCircle）
                 if main.drawCircle then
                     circleDrawing.Position = Vector2.new(screenX, screenY)
                     circleDrawing.Visible = true
-                else
-                    circleDrawing.Visible = false
                 end
-
-                -- 若需根据距离或目标大小动态调整圆半径，可在此处调整 circleDrawing.Radius
-                -- 例如：circleDrawing.Radius = math.clamp( (1000 / ( (targetHead.Position - Camera.CFrame.Position).Magnitude + 1) ), 4, 12)
-            else
-                lineDrawing.Visible = false
-                circleDrawing.Visible = false
             end
-        else
-            lineDrawing.Visible = false
-            circleDrawing.Visible = false
         end
     end)
 end
