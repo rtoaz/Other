@@ -8,7 +8,9 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    hitrate = 100 -- 命中率 0-100，默认 100
+    hitrate = 100, -- 命中率 0-100，默认 100
+    drawLine = false, -- 是否绘制连线（默认关闭）
+    drawCircle = false -- 是否绘制头部圆（默认关闭）
 }
 
 -- Drawing 支持检测与对象（可能在不同执行环境不可用）
@@ -136,7 +138,7 @@ oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, r
     return result or simulateRaycast(origin, direction, raycastParams)
 end)
 
--- UI部分（WindUI）
+-- UI部分（WindUI），并加入命中率滑块与视觉开关（默认关闭）
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -145,7 +147,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 380), -- 稍微增高以容纳更多控件
+    Size = UDim2.fromOffset(300, 420), -- 增高以容纳更多控件
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -226,6 +228,35 @@ Main:Slider({
     end
 })
 
+-- 可视化开关（默认关闭）
+Main:Toggle({
+    Title = "显示连线",
+    Image = "line",
+    Value = false,
+    Callback = function(state)
+        main.drawLine = state and true or false
+        if DrawingAvailable then
+            lineDrawing.Visible = false -- 立即隐藏/等待渲染循环决定显示
+        else
+            if state then warn("[BulletTracer] Drawing API not available — cannot show line.") end
+        end
+    end
+})
+
+Main:Toggle({
+    Title = "显示目标圈",
+    Image = "circle",
+    Value = false,
+    Callback = function(state)
+        main.drawCircle = state and true or false
+        if DrawingAvailable then
+            circleDrawing.Visible = false -- 立即隐藏/等待渲染循环决定显示
+        else
+            if state then warn("[BulletTracer] Drawing API not available — cannot show circle.") end
+        end
+    end
+})
+
 -- 可视化更新循环（使用 RenderStepped）
 local function updateVisuals()
     if not DrawingAvailable then
@@ -251,14 +282,22 @@ local function updateVisuals()
                 local centerX = Camera.ViewportSize.X / 2
                 local centerY = Camera.ViewportSize.Y / 2
 
-                -- 绘制线条
-                lineDrawing.From = Vector2.new(centerX, centerY)
-                lineDrawing.To = Vector2.new(screenX, screenY)
-                lineDrawing.Visible = true
+                -- 绘制线条（仅当 drawLine 开启）
+                if main.drawLine then
+                    lineDrawing.From = Vector2.new(centerX, centerY)
+                    lineDrawing.To = Vector2.new(screenX, screenY)
+                    lineDrawing.Visible = true
+                else
+                    lineDrawing.Visible = false
+                end
 
-                -- 绘制头部圆形（适中大小）
-                circleDrawing.Position = Vector2.new(screenX, screenY)
-                circleDrawing.Visible = true
+                -- 绘制头部圆形（仅当 drawCircle 开启）
+                if main.drawCircle then
+                    circleDrawing.Position = Vector2.new(screenX, screenY)
+                    circleDrawing.Visible = true
+                else
+                    circleDrawing.Visible = false
+                end
 
                 -- 若需根据距离或目标大小动态调整圆半径，可在此处调整 circleDrawing.Radius
                 -- 例如：circleDrawing.Radius = math.clamp( (1000 / ( (targetHead.Position - Camera.CFrame.Position).Magnitude + 1) ), 4, 12)
