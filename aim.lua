@@ -1,5 +1,6 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
@@ -9,6 +10,37 @@ local main = {
     friendcheck = false,
     hitrate = 100 -- 命中率 0-100，默认 100
 }
+
+-- Drawing 支持检测与对象（可能在不同执行环境不可用）
+local DrawingAvailable = false
+local lineDrawing, circleDrawing = nil, nil
+do
+    local ok, _ = pcall(function()
+        local tline = Drawing.new("Line")
+        tline:Remove()
+    end)
+    DrawingAvailable = ok
+    if DrawingAvailable then
+        lineDrawing = Drawing.new("Line")
+        circleDrawing = Drawing.new("Circle")
+
+        -- 线设置（白色）
+        lineDrawing.Color = Color3.new(1,1,1)
+        lineDrawing.Thickness = 2
+        lineDrawing.Transparency = 1
+        lineDrawing.Visible = false
+
+        -- 圆设置（白色，空心）
+        circleDrawing.Radius = 8 -- 屏幕像素半径（适中大小）
+        circleDrawing.Filled = false
+        circleDrawing.Color = Color3.new(1,1,1)
+        circleDrawing.Thickness = 2
+        circleDrawing.Transparency = 1
+        circleDrawing.Visible = false
+    else
+        warn("[BulletTracer] Drawing API not available — visuals disabled.")
+    end
+end
 
 -- 获取最近的头部（仅限摄像机可见范围内）
 local function getClosestHead()
@@ -41,7 +73,7 @@ local function getClosestHead()
                     -- 判断头部是否在摄像机视野内
                     local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
                     if onScreen and screenPos.Z > 0 then
-                        -- 距离检测
+                        -- 距离检测（使用 root 到本地 root 的距离）
                         local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
                         if distance < closestDistance then
                             closestHead = head
@@ -56,7 +88,7 @@ local function getClosestHead()
     return closestHead
 end
 
--- 模拟正常Raycast的函数
+-- 模拟正常Raycast的函数（备用）
 local function simulateRaycast(origin, direction, params)
     local result = Workspace:Raycast(origin, direction, params)
 
@@ -69,9 +101,8 @@ local function simulateRaycast(origin, direction, params)
     }
 end
 
--- 改写后的Raycast hook
+-- 改写后的Raycast hook（保持原有行为并注入命中逻辑）
 local oldRaycast
-
 oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, raycastParams)
     if main.enable and not checkcaller() then
         local closestHead = getClosestHead()
@@ -85,7 +116,7 @@ oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, r
             -- 命中率控制
             local roll = math.random(1, 100)
             if roll <= math.clamp(main.hitrate, 0, 100) then
-                -- 模拟命中头部，加入轻微偏移
+                -- 模拟命中头部，加入轻微偏移，降低检测风险
                 return {
                     Instance = closestHead,
                     Position = headPos + Vector3.new(
@@ -105,7 +136,7 @@ oldRaycast = hookfunction(Workspace.Raycast, function(self, origin, direction, r
     return result or simulateRaycast(origin, direction, raycastParams)
 end)
 
--- UI部分
+-- UI部分（WindUI）
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -114,7 +145,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 340),
+    Size = UDim2.fromOffset(300, 380), -- 稍微增高以容纳更多控件
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -156,6 +187,11 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
+        -- 当关闭时隐藏绘图对象（如果存在）
+        if not state and DrawingAvailable then
+            lineDrawing.Visible = false
+            circleDrawing.Visible = false
+        end
     end
 })
 
@@ -189,3 +225,55 @@ Main:Slider({
         print("命中率已设置为:", main.hitrate)
     end
 })
+
+-- 可视化更新循环（使用 RenderStepped）
+local function updateVisuals()
+    if not DrawingAvailable then
+        return
+    end
+
+    -- 每帧更新锁定目标并渲染线和圆
+    RunService.RenderStepped:Connect(function()
+        if not main.enable then
+            if lineDrawing.Visible or circleDrawing.Visible then
+                lineDrawing.Visible = false
+                circleDrawing.Visible = false
+            end
+            return
+        end
+
+        local targetHead = getClosestHead()
+        if targetHead and targetHead.Parent then
+            local screenPos, onScreen = Camera:WorldToViewportPoint(targetHead.Position)
+            if onScreen and screenPos.Z > 0 then
+                local screenX, screenY = screenPos.X, screenPos.Y
+                -- 屏幕中心（从中心连线到目标）
+                local centerX = Camera.ViewportSize.X / 2
+                local centerY = Camera.ViewportSize.Y / 2
+
+                -- 绘制线条
+                lineDrawing.From = Vector2.new(centerX, centerY)
+                lineDrawing.To = Vector2.new(screenX, screenY)
+                lineDrawing.Visible = true
+
+                -- 绘制头部圆形（适中大小）
+                circleDrawing.Position = Vector2.new(screenX, screenY)
+                circleDrawing.Visible = true
+
+                -- 若需根据距离或目标大小动态调整圆半径，可在此处调整 circleDrawing.Radius
+                -- 例如：circleDrawing.Radius = math.clamp( (1000 / ( (targetHead.Position - Camera.CFrame.Position).Magnitude + 1) ), 4, 12)
+            else
+                lineDrawing.Visible = false
+                circleDrawing.Visible = false
+            end
+        else
+            lineDrawing.Visible = false
+            circleDrawing.Visible = false
+        end
+    end)
+end
+
+-- 启动视觉更新（如果支持）
+if DrawingAvailable then
+    updateVisuals()
+end
