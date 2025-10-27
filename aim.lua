@@ -56,7 +56,7 @@ local function getClosestHead()
 end
 
 -- Hook __index on Workspace metatable to fake Raycast method
-local mt = getrawmetatable(Workspace)
+local mt = getrawmetatable(game)
 local old_index = mt.__index
 
 setreadonly(mt, false)
@@ -66,19 +66,27 @@ mt.__index = newcclosure(function(self, key)
         return old_index(self, key)
     end
     
-    if self == Workspace and key == "Raycast" and main.enable then
+    if self == Workspace and typeof(key) == "string" and key:lower() == "raycast" and main.enable then
         return newcclosure(function(origin, direction, raycastParams)
             local closestHead = getClosestHead()
             
             if closestHead then
+                local originPos = origin.Position or origin
                 local hitPosition = closestHead.Position
-                local normal = (origin - hitPosition).Unit
-                local distance = (hitPosition - origin).Magnitude
+                local normal = (originPos - hitPosition).Unit
+                local distance = (hitPosition - originPos).Magnitude
                 
-                return RaycastResult.new(closestHead, hitPosition, normal, Enum.Material.Plastic, distance)
+                -- 返回与原 Raycast 相同的 table 结构
+                return {
+                    Instance = closestHead,
+                    Position = hitPosition,
+                    Normal = normal,
+                    Material = Enum.Material.Plastic,
+                    Distance = distance
+                }
             end
             
-            -- Fallback to original Raycast if no target
+            -- Fallback to original Raycast
             return old_index(self, "Raycast")(origin, direction, raycastParams)
         end)
     end
@@ -135,6 +143,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
+        print("子弹追踪已" .. (state and "开启" or "关闭")) -- 添加调试输出
     end
 })
 
