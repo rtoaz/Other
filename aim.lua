@@ -34,34 +34,29 @@ end
 local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
-    
-    if not LocalPlayer.Character then
-        return
-    end
-    
+
+    if not LocalPlayer.Character then return end
     local localRoot = createProxy(LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
-    if not localRoot then
-        return
-    end
-    
+    if not localRoot then return end
+
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local skip = false
-            
+
             if main.teamcheck and player.Team == LocalPlayer.Team then
                 skip = true
             end
-            
+
             if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
                 skip = true
             end
-            
+
             if not skip then
                 local character = player.Character
                 local root = createProxy(character:FindFirstChild("HumanoidRootPart"))
                 local head = createProxy(character:FindFirstChild("Head"))
                 local humanoid = createProxy(character:FindFirstChildOfClass("Humanoid"))
-                
+
                 if root and head and humanoid and humanoid.Health > 0 then
                     local distance = (root.Position - localRoot.Position).Magnitude
                     if distance < closestDistance then
@@ -72,7 +67,6 @@ local function getClosestHead()
             end
         end
     end
-    
     return closestHead
 end
 
@@ -80,27 +74,21 @@ end
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
-    
+
     -- 仅拦截 Workspace 的 Raycast 调用，避免干扰 UI
     if method == "Raycast" and not checkcaller() and self == Workspace and main.enable then
         local origin = args[1] or Camera.CFrame.Position
         local closestHead = getClosestHead()
-        
         if closestHead then
             return {
                 Instance = closestHead,
-                Position = closestHead.Position + Vector3.new(
-                    math.random(-0.05, 0.05),
-                    math.random(-0.05, 0.05),
-                    math.random(-0.05, 0.05)
-                ),
+                Position = closestHead.Position + Vector3.new(math.random(-0.05, 0.05), math.random(-0.05, 0.05), math.random(-0.05, 0.05)),
                 Normal = (origin - closestHead.Position).Unit,
                 Material = Enum.Material.Plastic,
                 Distance = (closestHead.Position - origin).Magnitude
             }
         end
     end
-    
     return oldNamecall(self, ...)
 end))
 
@@ -143,7 +131,7 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("2E0249")，
+        Color3.fromHex("2E0249")， 
         Color3.fromHex("9D4EDD")
     ),
     Draggable = true,
@@ -154,10 +142,7 @@ local MainSection = Window:Section({
     Opened = false,
 })
 
-local Main = MainSection:Tab({
-    Title = "设置",
-    Icon = "Sword"
-})
+local Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
 Main:Toggle({
     Title = "开启子弹追踪",
@@ -189,12 +174,8 @@ Main:Toggle({
 -- 优化反检测措施
 local function antiDetect()
     -- 减少性能消耗，仅在必要时运行
-    if not main.enable then
-        return
-    end
-    
+    if not main.enable then return end
     local dummy = math.random(1, 1000)
-    
     if LocalPlayer.Character then
         local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
         if humanoid then
