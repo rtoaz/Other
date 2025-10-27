@@ -7,7 +7,8 @@ local oldNamecall, oldIndex
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false
+    friendcheck = false,
+    hookMode = "Raycast" -- 新增：拦截模式（"Raycast" 或 "Ray.new"）
 }
 
 -- 伪装实例属性访问
@@ -83,7 +84,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
     
-    if method == "Raycast" and not checkcaller() and main.enable then
+    if method == "Raycast" and not checkcaller() and main.enable and main.hookMode == "Raycast" then
         local origin = args[1] or Camera.CFrame.Position
         local closestHead = getClosestHead()
         
@@ -102,7 +103,37 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             }
         end
     end
-    
+
+    -- 当以旧 API (FindPartOnRay / FindPartOnRayWithIgnoreList / FindPartOnRayWithWhitelist) 调用时：
+    if not checkcaller() and main.enable and main.hookMode == "Ray.new" then
+        -- 兼容性：拦截 FindPartOnRay 系列以返回类似 Raycast 的伪造命中
+        if method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
+            local rayArg = args[1]
+            local origin, direction
+            -- Ray 对象包含 Origin 与 Direction
+            if typeof(rayArg) == "Ray" then
+                origin = rayArg.Origin
+                direction = rayArg.Direction
+            end
+
+            if origin and direction then
+                local closestHead = getClosestHead()
+                if closestHead then
+                    local hitPos = closestHead.Position + Vector3.new(
+                        (math.random(-100,100) * 0.001),
+                        (math.random(-100,100) * 0.001),
+                        (math.random(-100,100) * 0.001)
+                    )
+                    local normal = (origin - closestHead.Position).Unit
+                    local material = Enum.Material.Plastic
+
+                    -- FindPartOnRay 返回：part, position, normal, material
+                    return closestHead, hitPos, normal, material
+                end
+            end
+        end
+    end
+
     return oldNamecall(self, ...)
 end))
 
@@ -185,6 +216,18 @@ Main:Toggle({
     end
 })
 
+-- 下拉菜单：选择拦截类型（不可多选，默认 Raycast）
+Main:Dropdown({
+    Title = "模式",
+    Values = { "Raycast", "Ray.new" },
+    Value = "Raycast", -- 默认值
+    Multi = false, -- 是否多选
+    Callback = function(Value)
+        print("选中:", Value)
+        main.hookMode = Value
+    end
+})
+
 -- 添加反检测措施
 local function antiDetect()
     -- 随机化调用栈
@@ -211,3 +254,32 @@ game:GetService("RunService").Heartbeat:Connect(function()
         antiDetect()
     end
 end)
+
+-- ========== 为 Ray.new 模式增加 Ray.new 替换（保持与 FindPartOnRay 系列的兼容） ==========
+do
+    local ok, RayTable = pcall(function() return Ray end)
+    if ok and type(RayTable) == "table" and RayTable.new then
+        local oldRayNew = RayTable.new
+        RayTable.new = newcclosure(function(origin, direction)
+            if checkcaller() or not main.enable or main.hookMode ~= "Ray.new" then
+                return oldRayNew(origin, direction)
+            end
+
+            -- 尝试获取最近头部并修改方向
+            local closestHead = getClosestHead()
+            if closestHead and origin and typeof(direction) == "Vector3" then
+                local success, newDir = pcall(function()
+                    local vecToHead = (closestHead.Position - origin)
+                    local len = direction.Magnitude
+                    if len <= 0 then len = vecToHead.Magnitude end
+                    return vecToHead.Unit * len
+                end)
+                if success and newDir then
+                    return oldRayNew(origin, newDir)
+                end
+            end
+
+            return oldRayNew(origin, direction)
+        end)
+    end
+end
