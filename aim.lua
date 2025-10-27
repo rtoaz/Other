@@ -22,8 +22,7 @@ local function safeCall(func, ...)
 end
 
 -- 伪装实例属性访问
---（优化：复用 proxy，使用弱键表避免重复 newproxy）
-local proxyCache = setmetatable({}, { __mode = "k" }) -- 弱键表：键为原实例
+local proxyCache = setmetatable({}, { __mode = "k" })
 local function createProxy(instance)
     if not instance then return nil end
     if proxyCache[instance] then
@@ -48,8 +47,7 @@ local function createProxy(instance)
 end
 
 -- 获取最近的玩家头部
---（优化：节流 + 单独周期更新缓存，避免在每次 Raycast 中做完整遍历）
-local TARGET_UPDATE_RATE = 8 -- 每秒更新目标次数（可按需降低，例如 4 或 增大到 15）
+local TARGET_UPDATE_RATE = 6 -- 每秒更新次数（可调：2~10）
 local cachedHead = nil
 local lastUpdateTime = 0
 local accum = 0
@@ -61,31 +59,32 @@ local function computeClosestHead()
     if not LocalPlayer.Character then return nil end
     local localRoot = safeCall(function() return LocalPlayer.Character:FindFirstChild("HumanoidRootPart") end)
     if not localRoot then return nil end
+    local localPos = localRoot.Position
 
+    -- 避免大量 pcall：对外层主要逻辑使用较少的 pcall
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local skip = false
 
-            if main.teamcheck and safeCall(function() return player.Team == LocalPlayer.Team end) then
-                skip = true
+            if main.teamcheck then
+                local ok, sameTeam = pcall(function() return player.Team == LocalPlayer.Team end)
+                if ok and sameTeam then skip = true end
             end
 
-            if not skip and main.friendcheck and safeCall(function() return LocalPlayer:IsFriendsWith(player.UserId) end) then
-                skip = true
+            if not skip and main.friendcheck then
+                local ok, isFriend = pcall(function() return LocalPlayer:IsFriendsWith(player.UserId) end)
+                if ok and isFriend then skip = true end
             end
 
             if not skip then
                 local character = player.Character
-                local root = safeCall(function() return character:FindFirstChild("HumanoidRootPart") end)
-                local head = safeCall(function() return character:FindFirstChild("Head") end)
-                local humanoid = safeCall(function() return character:FindFirstChildOfClass("Humanoid") end)
+                local root = character:FindFirstChild("HumanoidRootPart")
+                local head = character:FindFirstChild("Head")
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-                if root and head and humanoid and safeCall(function() return humanoid.Health > 0 end) then
-                    local success, distance = pcall(function()
-                        return (root.Position - localRoot.Position).Magnitude
-                    end)
-                    if success and distance and distance < closestDistance then
-                        -- 只缓存真实实例（创建 proxy 留给需要时）
+                if root and head and humanoid and humanoid.Health > 0 then
+                    local distance = (root.Position - localPos).Magnitude
+                    if distance < closestDistance then
                         closestHead = head
                         closestDistance = distance
                     end
@@ -123,6 +122,11 @@ RunService.Heartbeat:Connect(function(dt)
 end)
 
 -- 钩子元方法：拦截 Raycast
+--（优化：只拦截从摄像机 origin 发起的射线；限制拦截频率；使用缓存并避免每次分配大量对象）
+local lastIntercept = 0
+local INTERCEPT_MIN_INTERVAL = 1 / 60 -- 最多每秒拦截 60 次（可调：降低到 30 或更少）
+local ORIGIN_EPSILON = 0.5 -- origin 与 Camera 位置差距允许值（米）
+
 if hookmetamethod then
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
@@ -130,21 +134,47 @@ if hookmetamethod then
 
         if method == "Raycast" and not checkcaller() and self == Workspace and main.enable then
             local origin = args[1] or (Camera and Camera.CFrame.Position)
+            if not origin then
+                return oldNamecall(self, ...)
+            end
+
+            -- 限制只处理摄像机发起或非常接近摄像机的 origin（减少误拦截）
+            local camPos = Camera and Camera.CFrame and Camera.CFrame.Position
+            if not camPos then
+                return oldNamecall(self, ...)
+            end
+            if (origin - camPos).Magnitude > ORIGIN_EPSILON then
+                return oldNamecall(self, ...)
+            end
+
+            -- 限制拦截频率，避免热路径过于频繁
+            local now = tick()
+            if now - lastIntercept < INTERCEPT_MIN_INTERVAL then
+                return oldNamecall(self, ...)
+            end
+            lastIntercept = now
+
             local closestHeadInst = safeCall(function() return getClosestHead(false) end)
             if closestHeadInst then
-                local headProxy = safeCall(function() return createProxy(closestHeadInst) end) or closestHeadInst
-                local success, pos = pcall(function() return headProxy.Position end)
-                if success and pos then
+                -- 直接使用真实实例位置（避免频繁 newproxy）
+                local ok, headPos = pcall(function() return closestHeadInst.Position end)
+                if ok and headPos then
+                    -- 轻微抖动以模拟不完美瞄准
+                    local jitter = Vector3.new(math.random() * 0.1 - 0.05, math.random() * 0.1 - 0.05, math.random() * 0.1 - 0.05)
+                    local hitPos = headPos + jitter
+                    local normal = (origin - headPos)
+                    if normal.Magnitude > 0 then normal = normal.Unit else normal = Vector3.new(0,1,0) end
                     return {
                         Instance = closestHeadInst,
-                        Position = pos + Vector3.new(math.random(-0.05, 0.05), math.random(-0.05, 0.05), math.random(-0.05, 0.05)),
-                        Normal = (origin - pos).Unit,
+                        Position = hitPos,
+                        Normal = normal,
                         Material = Enum.Material.Plastic,
-                        Distance = (pos - origin).Magnitude
+                        Distance = (hitPos - origin).Magnitude
                     }
                 end
             end
         end
+
         return oldNamecall(self, ...)
     end))
 else
@@ -152,19 +182,28 @@ else
 end
 
 -- 拦截 __index 元方法，仅针对 Character 相关实例
+--（收紧拦截：绝不拦截 Camera 或 LocalPlayer 的部件；只对非本地玩家的 BasePart/Humanoid 代理）
 if hookmetamethod then
     oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
-        -- 排除 Camera 相关实例，防止摄像机读取被代理导致的不同步
-        local isCameraDescendant = false
-        local ok, res = pcall(function()
-            return typeof(self) == "Instance" and self:IsDescendantOf(Camera)
-        end)
-        if ok and res then
+        -- 保护摄像机及本地角色：不代理它们，直接返回原始值
+        local okCamera, isCameraDesc = pcall(function() return typeof(self) == "Instance" and self:IsDescendantOf(Camera) end)
+        if okCamera and isCameraDesc then
             return oldIndex(self, key)
         end
 
+        local okLocal, isLocalDesc = pcall(function()
+            if LocalPlayer and LocalPlayer.Character and typeof(self) == "Instance" then
+                return self:IsDescendantOf(LocalPlayer.Character)
+            end
+            return false
+        end)
+        if okLocal and isLocalDesc then
+            return oldIndex(self, key)
+        end
+
+        -- 仅在非本地的 BasePart 或 Humanoid 上代理 Position/CFrame/Health
         if not checkcaller() and (key == "Position" or key == "CFrame" or key == "Health") then
-            local isa = safeCall(function() return self:IsA("BasePart") or self:IsA("Humanoid") end)
+            local isa = safeCall(function() return self:IsA and (self:IsA("BasePart") or self:IsA("Humanoid")) end)
             if isa then
                 local proxy = safeCall(function() return createProxy(self) end)
                 if proxy then
@@ -172,6 +211,7 @@ if hookmetamethod then
                 end
             end
         end
+
         return oldIndex(self, key)
     end))
 else
@@ -272,7 +312,6 @@ local function antiDetect()
 end
 
 -- 降低频率的反检测
---（把 Stepped 换成 Heartbeat，频率更稳定）
 RunService.Heartbeat:Connect(function()
     if main.enable and math.random() < 0.06 then
         safeCall(antiDetect)
