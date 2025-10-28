@@ -176,7 +176,9 @@ local function getClosestHead()
         return
     end
     
-    local mousePos = UserInputService:GetMouseLocation()
+    -- FOV现在固定在屏幕中心
+    local viewportSize = Camera.ViewportSize
+    local centerPos = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character ~= LocalPlayer.Character then -- 双重排除自身
@@ -196,11 +198,11 @@ local function getClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
                 
                 if head and humanoid and humanoid.Health > 0 and character ~= LocalPlayer.Character then -- 再次排除
-                    -- 使用2D屏幕FOV检查
+                    -- 使用2D屏幕FOV检查 (中心点)
                     local screenPos, onScreen = Camera:WorldToScreenPoint(head.Position)
                     if onScreen then
                         local screenVector = Vector2.new(screenPos.X, screenPos.Y)
-                        local distance2D = (screenVector - mousePos).Magnitude
+                        local distance2D = (screenVector - centerPos).Magnitude
                         
                         if distance2D * distance2D < closestDistance then
                             closestHead = head
@@ -224,7 +226,7 @@ screenGui.ResetOnSpawn = false
 local fovFrame = Instance.new("Frame")
 fovFrame.Name = "FOVCircle"
 fovFrame.Size = UDim2.new(0, main.fov * 2, 0, main.fov * 2)
-fovFrame.Position = UDim2.new(0.5, -main.fov, 0.5, -main.fov)
+fovFrame.Position = UDim2.new(0.5, -main.fov, 0.5, -main.fov) -- 固定在屏幕中心
 fovFrame.BackgroundTransparency = 1
 fovFrame.BorderSizePixel = 0
 fovFrame.Visible = false
@@ -240,7 +242,7 @@ stroke.Thickness = 3
 stroke.Transparency = 0
 stroke.Parent = fovFrame
 
--- 射线显示使用ScreenGui (模拟线条从鼠标到目标屏幕位置)
+-- 射线显示使用ScreenGui (模拟线条从屏幕中心到目标屏幕位置)
 local rayLine = Instance.new("Frame")
 rayLine.Name = "RayLine"
 rayLine.Size = UDim2.new(0, 1, 0, 1)
@@ -257,11 +259,11 @@ rayStroke.Parent = rayLine
 
 RunService.RenderStepped:Connect(function()
     if main.enable then
-        local mousePos = UserInputService:GetMouseLocation()
         
-        -- FOV更新
+        -- FOV更新 (固定中心，无需鼠标)
         if main.fovVisible then
-            fovFrame.Position = UDim2.new(0, mousePos.X - main.fov, 0, mousePos.Y - main.fov)
+            local viewportSize = Camera.ViewportSize
+            fovFrame.Position = UDim2.new(0.5, -main.fov, 0.5, -main.fov)
             fovFrame.Size = UDim2.new(0, main.fov * 2, 0, main.fov * 2)
             fovFrame.Visible = true
             stroke.Color = main.fovColor
@@ -269,16 +271,18 @@ RunService.RenderStepped:Connect(function()
             fovFrame.Visible = false
         end
         
-        -- 射线更新
+        -- 射线更新 (从中心到目标)
         if main.showRay then
+            local viewportSize = Camera.ViewportSize
+            local centerPos = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
             local closestHead = getClosestHead()
             if closestHead and closestHead.Parent ~= LocalPlayer.Character then
                 local screenPos, onScreen = Camera:WorldToScreenPoint(closestHead.Position)
                 if onScreen then
-                    local from = mousePos
+                    local from = centerPos
                     local to = Vector2.new(screenPos.X, screenPos.Y)
                     
-                    -- 计算线条位置/大小 (从鼠标到目标)
+                    -- 计算线条位置/大小 (从中心到目标)
                     local minX = math.min(from.X, to.X)
                     local maxX = math.max(from.X, to.X)
                     local minY = math.min(from.Y, to.Y)
