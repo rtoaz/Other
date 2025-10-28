@@ -11,8 +11,8 @@ local main = {
     teamcheck = false,
     friendcheck = false,
     currentTargetHead = nil,
-    lastTargetUpdate = 0,  -- 新增：缓存更新时间
-    updateInterval = 0.5   -- 每0.5秒更新目标
+    lastTargetUpdate = 0,
+    updateInterval = 0.2  -- 更短间隔，但射击时触发
 }
 
 -- 保存原始（延迟到启用时）
@@ -37,7 +37,7 @@ local function setupHiding()
     -- 隐藏：Hook __index for game instance
     local mt_game_index = getrawmetatable(game).__index or function() end
     hookmetamethod(game, "__index", newcclosure(function(self, key)
-        if rawequal(self, key) and key == "metatable" then
+        if rawequal(self, game) and key == "metatable" then
             local fake_mt = {}
             for k, v in pairs(mt_game) do
                 fake_mt[k] = (k == "__namecall" and original_namecall) or v
@@ -89,15 +89,14 @@ local function updateBulletLine(head)
     main.beam.Width1 = 0.5
     main.beam.Parent = Workspace
     
-    game:GetService("Debris"):AddItem(main.beam, 0.1)
-    game:GetService("Debris"):AddItem(originPart, 0.1)
+    game:GetService("Debris"):AddItem({main.beam, originPart}, 0.1)  -- 批量销毁
 end
 
--- 优化版：缓存目标，只定期更新
+-- 优化版：缓存 + 距离过滤
 local function getClosestHead()
     local now = tick()
     if now - main.lastTargetUpdate < main.updateInterval then
-        return main.currentTargetHead  -- 用缓存
+        return main.currentTargetHead
     end
     main.lastTargetUpdate = now
 
@@ -127,7 +126,7 @@ local function getClosestHead()
 
                 if root and head and humanoid and humanoid.Health > 0 then
                     local distance = (root.Position - playerPos).Magnitude
-                    if distance < closestDistance and distance < 500 then  -- 新增：限制距离<500，避免远玩家
+                    if distance < 300 and distance < closestDistance then  -- 过滤<300 studs
                         closestHead = head
                         closestDistance = distance
                     end
@@ -141,6 +140,11 @@ end
 
 local function setupNamecallHook()
     old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        -- 白名单：保护Camera，防止冻结
+        if rawequal(self, Camera) then
+            return old_namecall(self, ...)
+        end
+        
         local method = getnamecallmethod()
         local args = {...}
 
@@ -149,7 +153,7 @@ local function setupNamecallHook()
             local direction = args[2] or (Camera.CFrame.LookVector * 1000)
             local params = args[3]
 
-            local closestHead = getClosestHead()  -- 现在用缓存，少调用
+            local closestHead = getClosestHead()
             if closestHead then
                 local hitResult = createFakeRaycastResult(origin, closestHead)
                 
@@ -163,14 +167,6 @@ local function setupNamecallHook()
         return old_namecall(self, ...)
     end))
 end
-
--- 移除Stepped连接（防冻结不再需要）；用Heartbeat低频更新目标
-local targetConnection
-RunService.Heartbeat:Connect(function()
-    if main.enable then
-        getClosestHead()  -- 低频触发更新
-    end
-end)
 
 -- UI
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
