@@ -1,5 +1,6 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old_namecall
@@ -98,9 +99,32 @@ end)
 mt.__namecall = new_namecall
 setreadonly(mt, true)
 
--- 修复相机跟随：强制设置CameraType为Custom（默认跟随玩家）
-Camera.CameraType = Enum.CameraType.Custom
-Camera.CameraSubject = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") or nil
+-- 新：相机跟随管理器（用于修复“开启子弹追踪相机冻结不跟随人物”的问题）
+-- 说明：
+--  * 只在 main.enable == true 时强制确保 CameraType 为 Custom 且 CameraSubject 指向当前角色的 Humanoid。
+--  * 通过 RenderStepped 进行检测，但仅在需要修改时才写入 Camera 属性，避免干扰玩家手动切换相机并降低卡顿风险。
+local cameraEnforcerConnection
+cameraEnforcerConnection = RunService.RenderStepped:Connect(function()
+    -- 如果没有角色或摄像机，跳过
+    if not LocalPlayer or not LocalPlayer.Character or not Camera then
+        return
+    end
+
+    -- 只在子弹追踪开启时修正相机，避免无谓干涉
+    if main.enable then
+        local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            -- 仅在必须时修改，减少写入导致的“冻结”
+            if Camera.CameraType ~= Enum.CameraType.Custom then
+                Camera.CameraType = Enum.CameraType.Custom
+            end
+            if Camera.CameraSubject ~= humanoid then
+                Camera.CameraSubject = humanoid
+            end
+        end
+    end
+    -- 当 main.enable == false 时我们不主动恢复或修改相机，让游戏/玩家控制恢复默认行为
+end)
 
 -- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
 local cleanEnv = getfenv()
@@ -156,6 +180,7 @@ Main:Toggle({
     Callback = function(state)
         main.enable = state
         print("子弹追踪已" .. (state and "开启" or "关闭"))  -- 添加打印调试
+        -- 注：相机跟随管理器会在 RenderStepped 中自动响应 main.enable 的变化
     end
 })
 
