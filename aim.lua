@@ -66,9 +66,11 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 跳过相机射线（防止相机冻结）
+        -- 更严格判断相机射线：origin == Camera.CFrame.Position 且 direction.Magnitude 很小（通常 < 10）
         if origin and Camera and origin == Camera.CFrame.Position then
-            return old_namecall(self, ...)
+            if not direction or direction.Magnitude < 10 then
+                return old_namecall(self, ...)
+            end
         end
 
         if main.enable then
@@ -91,7 +93,7 @@ setreadonly(mt, true)
 
 -- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
 local cleanEnv = getfenv()
-for k, v in pairs(cleanEnv) do
+for k, v 在 pairs(cleanEnv) do
     if type(k) == "string" and (k:find("hook") or k:find("exploit")) then
         cleanEnv[k] = nil
     end
