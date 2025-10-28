@@ -9,7 +9,7 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    fov = 100, -- 可调整FOV
+    fov = 100, -- 可调整FOV (屏幕像素)
     fovColor = Color3.fromRGB(255, 255, 255) -- 默认白色
 }
 
@@ -110,7 +110,7 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
             return old_namecall(self, ...)
         end
         
-        -- 检查是否为射击上下文 (参数过滤自身角色)
+        -- 检查是否为射击上下文 (参数过滤自身角色) - 移除无条件设置isShooting=true
         local isShooting = false
         
         if raycastParams and raycastParams.FilterType == Enum.RaycastFilterType.Blacklist then
@@ -122,20 +122,22 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
             end
         end
         
-        -- 额外：长方向已确认为射击
-        isShooting = true
+        -- 额外检查：如果方向很长且起点不是相机相关，视为射击（但优先参数检查）
+        if not isShooting and direction.Magnitude > 100 then
+            isShooting = true
+        end
         
         if isShooting then
             local closestHead = getClosestHead()
             
             if closestHead then
-                print("Raycast 已钩子 - 瞄准头部 (长射线上下文)") -- 调试
+                print("Raycast 已钩子 - 瞄准头部 (射击上下文)") -- 调试
                 local hitPosition = closestHead.Position
-                local normal = (originPos - hitPosition).Unit
+                local rayDirection = (hitPosition - originPos).Unit -- 修正normal为射线方向
                 local distance = (hitPosition - originPos).Magnitude
                 
                 -- 为兼容性返回 RaycastResult
-                return RaycastResult.new(closestHead, hitPosition, normal, Enum.Material.Plastic, distance)
+                return RaycastResult.new(closestHead, hitPosition, rayDirection, Enum.Material.Plastic, distance)
             end
         end
     end
@@ -145,11 +147,13 @@ end))
 
 local function getClosestHead()
     local closestHead
-    local closestDistance = main.fov
+    local closestDistance = main.fov * main.fov -- 使用平方以避免sqrt计算
     
     if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
         return
     end
+    
+    local mousePos = UserInputService:GetMouseLocation()
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -165,16 +169,20 @@ local function getClosestHead()
             
             if not skip then
                 local character = player.Character
-                local root = character:FindFirstChild("HumanoidRootPart")
                 local head = character:FindFirstChild("Head")
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
                 
-                if root and head and humanoid and humanoid.Health > 0 then
-                    local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                    
-                    if distance < closestDistance then
-                        closestHead = head
-                        closestDistance = distance
+                if head and humanoid and humanoid.Health > 0 then
+                    -- 关键修复：使用2D屏幕FOV检查，而不是3D距离
+                    local screenPos, onScreen = Camera:WorldToScreenPoint(head.Position)
+                    if onScreen then
+                        local screenVector = Vector2.new(screenPos.X, screenPos.Y)
+                        local distance2D = (screenVector - mousePos).Magnitude
+                        
+                        if distance2D * distance2D < closestDistance then
+                            closestHead = head
+                            closestDistance = distance2D * distance2D
+                        end
                     end
                 end
             end
