@@ -64,20 +64,6 @@ local new_namecall = newcclosure(function(self, ...)
     if method == "Raycast" and self == Workspace and not checkcaller() then
         local origin = args[1]
         local direction = args[2]
-        local params = args[3]
-
-        -- 严格跳过相机射线（防止冻结 + 避免污染其他系统）
-        if origin and Camera and origin == Camera.CFrame.Position then
-            if not direction or direction.Magnitude < 50 then
-                return old_namecall(self, ...)
-            end
-        end
-
-        -- 额外：跳过 WaterGraphics 相关射线（避免干扰）
-        local callingScript = getcallingscript()
-        if callingScript and callingScript.Name == "WaterGraphics" then
-            return old_namecall(self, ...)
-        end
 
         if main.enable then
             local closestHead = getClosestHead()
@@ -91,7 +77,7 @@ local new_namecall = newcclosure(function(self, ...)
                 if distance == 0 then unitNormal = direction.Unit end
 
                 print("Raycast 追踪到目标: " .. closestHead.Parent.Name)  -- 调试打印
-                -- 完全标准构造，避免任何 nil
+
                 return {
                     Instance = closestHead,
                     Position = hitPos,
