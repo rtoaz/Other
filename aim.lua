@@ -93,7 +93,7 @@ setreadonly(mt, true)
 
 -- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
 local cleanEnv = getfenv()
-for k, v 在 pairs(cleanEnv) do
+for k, v in pairs(cleanEnv) do
     if type(k) == "string" and (k:find("hook") or k:find("exploit")) then
         cleanEnv[k] = nil
     end
