@@ -7,6 +7,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local main = {
     enable = false,
+    fovVisible = false, -- 新增FOV可见性控制
     teamcheck = false,
     friendcheck = false,
     fov = 100, -- 可调整FOV (屏幕像素)
@@ -130,8 +131,8 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
         if isShooting then
             local closestHead = getClosestHead()
             
-            if closestHead then
-                print("Raycast 已钩子 - 瞄准头部 (射击上下文)") -- 调试
+            if closestHead and closestHead.Parent ~= LocalPlayer.Character then -- 额外排除自身角色
+                print("Raycast 已钩子 - 瞄准头部 (射击上下文): " .. closestHead.Parent.Name) -- 调试输出目标玩家名
                 -- 执行原始Raycast以获取真实结果作为备选
                 local originalResult = old_namecall(self, ...)
                 
@@ -156,6 +157,8 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
                 }
                 
                 return fakeResult
+            else
+                print("无有效目标或锁定到自身 - 跳过钩子") -- 调试
             end
         end
     end
@@ -174,7 +177,7 @@ local function getClosestHead()
     local mousePos = UserInputService:GetMouseLocation()
     
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
+        if player ~= LocalPlayer and player.Character and player.Character ~= LocalPlayer.Character then -- 双重排除自身
             local skip = false
             
             if main.teamcheck and player.Team == LocalPlayer.Team then
@@ -190,7 +193,7 @@ local function getClosestHead()
                 local head = character:FindFirstChild("Head")
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
                 
-                if head and humanoid and humanoid.Health > 0 then
+                if head and humanoid and humanoid.Health > 0 and character ~= LocalPlayer.Character then -- 再次排除
                     -- 使用2D屏幕FOV检查
                     local screenPos, onScreen = Camera:WorldToScreenPoint(head.Position)
                     if onScreen then
@@ -220,14 +223,14 @@ fovCircle.Filled = false
 fovCircle.Transparency = 0 -- 设置为0以完全不透明
 
 RunService.RenderStepped:Connect(function()
-    if main.enable then
+    if main.enable and main.fovVisible then
         local mousePos = UserInputService:GetMouseLocation()
         fovCircle.Position = Vector2.new(mousePos.X, mousePos.Y)
         fovCircle.Visible = true
         fovCircle.Radius = main.fov
         fovCircle.Color = main.fovColor
         fovCircle.Transparency = 0 -- 强制不透明
-        print("FOV圆圈已更新 - 位置:", mousePos.X, mousePos.Y, "半径:", main.fov) -- 调试输出
+        -- print("FOV圆圈已更新 - 位置:", mousePos.X, mousePos.Y, "半径:", main.fov) -- 调试输出 (可选关闭)
     else
         fovCircle.Visible = false
     end
@@ -280,6 +283,16 @@ Main:Toggle({
     Callback = function(state)
         main.enable = state
         print("Raycast追踪已" .. (state and "开启" or "关闭") .. " - 使用通用绕过。检查控制台钩子触发。")
+    end
+})
+
+Main:Toggle({  -- 新增FOV开启按钮
+    Title = "开启FOV显示",
+    Value = false, -- 初始值
+    Type = "Toggle", -- 或 "Checkbox"
+    Callback = function(Value)
+        main.fovVisible = Value
+        print("FOV显示状态:", Value)
     end
 })
 
