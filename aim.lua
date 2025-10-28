@@ -2,7 +2,6 @@ local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
@@ -14,12 +13,7 @@ local main = {
     fovColor = Color3.fromRGB(255, 255, 255) -- 默认白色
 }
 
--- Da Hood / Adonis-like 反作弊绕过
-local tablefind = table.find
-local MainEvent = ReplicatedStorage:WaitForChild("MainEvent", 5) -- Da Hood 特定
-local Flags = {"CHECKER_1", "TeleportDetect", "OneMoreTime", "indexInstance"} -- 常见标志
-
--- 清理现有的 indexInstance 标志 (运行一次)
+-- 清理现有的 indexInstance 标志 (通用循环)
 spawn(function()
     while true do
         wait(1)
@@ -32,7 +26,7 @@ spawn(function()
     end
 end)
 
--- 钩子 __newindex 以防止设置 indexInstance 或 ws/jp
+-- 钩子 __newindex 以防止设置 indexInstance 或 ws/jp (通用防AC重置)
 local mt = getrawmetatable(game)
 local old_newindex = mt.__newindex
 
@@ -55,7 +49,7 @@ mt.__newindex = newcclosure(function(self, key, value)
     return old_newindex(self, key, value)
 end)
 
--- 钩子 __index 以绕过检查
+-- 钩子 __index 以绕过检查 (伪装未标记)
 local old_index = mt.__index
 
 mt.__index = newcclosure(function(self, key)
@@ -72,57 +66,73 @@ end)
 
 setreadonly(mt, true)
 
--- Raycast 钩子带相机跳过 (修复冻结和开火问题)
+-- 强制相机跟随修复 (使用 RenderStepped 以更平滑更新)
+spawn(function()
+    RunService.RenderStepped:Connect(function()
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+            Camera.CameraSubject = LocalPlayer.Character.Humanoid
+            Camera.CameraType = Enum.CameraType.Custom
+        end
+    end)
+end)
+
+-- Raycast 钩子带方向长度检查 (优先跳过短射线以修复相机)
 local old_namecall
 
 old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    -- 绕过检测 (例如，FireServer 标志)
-    if method == "FireServer" and MainEvent and self == MainEvent and tablefind(Flags, args[1]) then
-        print("已绕过 FireServer 标志: " .. tostring(args[1]))
-        return
-    end
-
-    -- 反崩溃 (如果适用)
+    -- 通用反崩溃 (如果适用)
     if not checkcaller() and getfenv(2).crash then
         local fenv = getfenv(2)
         fenv.crash = function() end
         setfenv(2, fenv)
     end
 
-    -- Raycast 钩子：仅针对射击修改 (跳过相机射线)
+    -- Raycast 钩子：仅针对长射线 (射击) 修改，跳过短射线 (相机)
     if main.enable and method == "Raycast" and self == Workspace and not checkcaller() then
         local origin = args[1]
         local direction = args[2]
         local raycastParams = args[3]
         
-        -- 如果起点来自相机则跳过 (防止相机冻结)
-        local cameraPos = Camera.CFrame.Position
-        if (origin - cameraPos).Magnitude < 5 then -- 相机射线容差
+        -- 修复 origin 类型：如果是 CFrame，取 Position
+        local originPos = typeof(origin) == "CFrame" and origin.Position or origin
+        
+        -- 关键修复：如果方向长度 < 50，则跳过 (相机短射线，通常 <50 studs)
+        if direction and direction.Magnitude < 50 then
             return old_namecall(self, ...)
         end
         
-        -- 可选：检查是否为射击上下文 (例如，参数过滤自身角色)
-        local isShooting = true
+        -- 如果起点来自相机则额外跳过 (但现在方向检查为主)
+        local cameraPos = Camera.CFrame.Position
+        if (originPos - cameraPos).Magnitude < 5 then
+            return old_namecall(self, ...)
+        end
         
-        if raycastParams then
-            if raycastParams.FilterType == Enum.RaycastFilterType.Blacklist and tablefind(raycastParams.FilterDescendantsInstances, LocalPlayer.Character) then
-                isShooting = true
-            else
-                isShooting = false -- 跳过非射击射线
+        -- 检查是否为射击上下文 (参数过滤自身角色)
+        local isShooting = false
+        
+        if raycastParams and raycastParams.FilterType == Enum.RaycastFilterType.Blacklist then
+            for _, filter in ipairs(raycastParams.FilterDescendantsInstances) do
+                if filter == LocalPlayer.Character then
+                    isShooting = true
+                    break
+                end
             end
         end
+        
+        -- 额外：长方向已确认为射击
+        isShooting = true
         
         if isShooting then
             local closestHead = getClosestHead()
             
             if closestHead then
-                print("Raycast 已钩子 - 瞄准头部 (射击上下文)") -- 调试
+                print("Raycast 已钩子 - 瞄准头部 (长射线上下文)") -- 调试
                 local hitPosition = closestHead.Position
-                local normal = (origin - hitPosition).Unit
-                local distance = (hitPosition - origin).Magnitude
+                local normal = (originPos - hitPosition).Unit
+                local distance = (hitPosition - originPos).Magnitude
                 
                 -- 为兼容性返回 RaycastResult
                 return RaycastResult.new(closestHead, hitPosition, normal, Enum.Material.Plastic, distance)
@@ -241,18 +251,16 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
-        print("追踪已" .. (state and "开启" or "关闭") .. " - 已跳过相机Raycast以防冻结。检查控制台钩子触发。")
+        print("Raycast追踪已" .. (state and "开启" or "关闭") .. " - 使用通用绕过。检查控制台钩子触发。")
     end
 })
 
 Main:Slider({
-    Title = "FOV (视野范围)",
-    Min = 50,
-    Max = 500,
-    Value = 100,
-    Callback = function(value)
-        main.fov = value
-        print("FOV设置为: " .. value)
+    Title = "FOV",
+    Value = { Min = 50, Max = 500, Default = 100 },
+    Callback = function(Value)
+        main.fov = Value
+        print("FOV设置为: " .. Value)
     end
 })
 
