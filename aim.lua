@@ -132,36 +132,38 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
         if isShooting then
             local closestHead = getClosestHead()
             
-            if closestHead and closestHead.Parent ~= LocalPlayer.Character then
-                print("Raycast 已钩子 - 瞄准头部 (射击上下文): " .. closestHead.Parent.Name) -- 调试输出目标玩家名
-                -- 执行原始Raycast以获取真实结果作为备选
-                local originalResult = old_namecall(self, ...)
-                
-                if originalResult and originalResult.Instance then
-                    -- 如果原始有击中，使用它（避免子弹消失）
-                    return originalResult
-                end
-                
-                local hitPosition = closestHead.Position
-                local rayDirection = hitPosition - originPos
-                local distance = math.min(rayDirection.Magnitude, direction.Magnitude) -- 限制距离不超过原方向长度
-                local normal = (rayDirection.Unit * -1) -- 表面法线
-                local material = closestHead.Material
-                
-                -- 创建假 RaycastResult (使用表模拟属性，避免方法调用错误)
-                local fakeResult = {
-                    Instance = closestHead,
-                    Position = hitPosition,
-                    Normal = normal,
-                    Material = material,
-                    Distance = distance
-                }
-                
-                return fakeResult
-            else
-                print("无有效目标或锁定到自身 - 执行原始Raycast") -- 调试
-                return old_namecall(self, ...) -- 始终返回原始，避免nil导致吞子弹
+            -- 无锁定玩家时，直接返回原始Raycast（保持原射击角度，不追踪）
+            if not closestHead or closestHead.Parent == LocalPlayer.Character then
+                print("无锁定玩家 - 保持原射击角度") -- 调试
+                return old_namecall(self, ...)
             end
+            
+            print("Raycast 已钩子 - 瞄准头部 (射击上下文): " .. closestHead.Parent.Name) -- 调试输出目标玩家名
+            -- 执行原始Raycast以获取真实结果作为备选
+            local originalResult = old_namecall(self, ...)
+            
+            if originalResult and originalResult.Instance then
+                -- 如果原始有击中，使用它（避免子弹消失）
+                return originalResult
+            end
+            
+            local hitPosition = closestHead.Position
+            local rayDirection = hitPosition - originPos
+            local distance = math.min(rayDirection.Magnitude, direction.Magnitude) -- 限制距离不超过原方向长度
+            local normal = Vector3.new(0, 1, 0) -- 使用默认向上法线，避免方向反转导致子弹往后射
+            
+            local material = closestHead.Material
+            
+            -- 创建假 RaycastResult (使用表模拟属性，避免方法调用错误)
+            local fakeResult = {
+                Instance = closestHead,
+                Position = hitPosition,
+                Normal = normal,
+                Material = material,
+                Distance = distance
+            }
+            
+            return fakeResult
         end
     end
     
@@ -222,6 +224,7 @@ local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "FOVGui"
 screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true -- 忽略顶部UI栏偏移，确保精确中心
 
 local fovFrame = Instance.new("Frame")
 fovFrame.Name = "FOVCircle"
@@ -242,11 +245,11 @@ stroke.Thickness = 3
 stroke.Transparency = 0
 stroke.Parent = fovFrame
 
--- 射线显示使用ScreenGui (模拟细线条从屏幕中心到目标屏幕位置)
+-- 射线显示使用ScreenGui (模拟细线条从屏幕中心到玩家身体屏幕位置)
 local rayLine = Instance.new("Frame")
 rayLine.Name = "RayLine"
-rayLine.AnchorPoint = Vector2.new(0, 0.5) -- 锚点调整以从起点开始
-rayLine.Size = UDim2.new(0, 0, 0, 2) -- 初始细高度 (厚度)
+rayLine.AnchorPoint = Vector2.new(0, 0.5) -- 锚点从起点中间开始
+rayLine.Size = UDim2.new(0, 0, 0, 1) -- 初始细厚度 (Y=1像素)
 rayLine.BackgroundTransparency = 1
 rayLine.BorderSizePixel = 0
 rayLine.Visible = false
@@ -254,7 +257,7 @@ rayLine.Parent = screenGui
 
 local rayStroke = Instance.new("UIStroke")
 rayStroke.Color = main.fovColor
-rayStroke.Thickness = 2
+rayStroke.Thickness = 1 -- 更细以模拟线条
 rayStroke.Transparency = 0
 rayStroke.Parent = rayLine
 
@@ -263,38 +266,45 @@ RunService.RenderStepped:Connect(function()
         local viewportSize = Camera.ViewportSize
         local centerPos = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
         
-        -- FOV更新 (独立控制，固定中心)
+        -- FOV更新 (独立控制，固定中心，精确像素)
         if main.fovVisible then
-            fovFrame.Position = UDim2.new(0.5, -main.fov, 0.5, -main.fov)
-            fovFrame.Size = UDim2.new(0, main.fov * 2, 0, main.fov * 2)
+            local fovSize = main.fov * 2
+            fovFrame.Position = UDim2.new(0, viewportSize.X / 2 - main.fov, 0, viewportSize.Y / 2 - main.fov)
+            fovFrame.Size = UDim2.new(0, fovSize, 0, fovSize)
             fovFrame.Visible = true
             stroke.Color = main.fovColor
-            print("FOV显示已更新 - 固定中心") -- 调试: 确认FOV独立显示
+            print("FOV显示已更新 - 固定中心: X=" .. (viewportSize.X / 2) .. ", Y=" .. (viewportSize.Y / 2)) -- 调试: 确认中心坐标
         else
             fovFrame.Visible = false
         end
         
-        -- 射线更新 (独立，从中心到目标，模拟细线)
+        -- 射线更新 (独立，从中心到玩家身体，细线连接)
         if main.showRay then
             local closestHead = getClosestHead()
             if closestHead and closestHead.Parent ~= LocalPlayer.Character then
-                local screenPos, onScreen = Camera:WorldToScreenPoint(closestHead.Position)
-                if onScreen then
-                    local from = centerPos
-                    local to = Vector2.new(screenPos.X, screenPos.Y)
-                    local distance = (to - from).Magnitude
-                    
-                    if distance > 0 then
-                        rayLine.Position = UDim2.new(0, from.X, 0, from.Y)
-                        rayLine.Size = UDim2.new(0, distance, 0, 2) -- X=长度, Y=厚度
-                        rayLine.Visible = true
-                        rayStroke.Color = main.fovColor
+                local character = closestHead.Parent
+                local rootPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso") -- 连接到身体
+                if rootPart then
+                    local screenPos, onScreen = Camera:WorldToScreenPoint(rootPart.Position)
+                    if onScreen then
+                        local from = centerPos
+                        local to = Vector2.new(screenPos.X, screenPos.Y)
+                        local distance = (to - from).Magnitude
                         
-                        -- 旋转线条以匹配方向
-                        local angle = math.atan2(to.Y - from.Y, to.X - from.X) * 180 / math.pi
-                        rayLine.Rotation = angle
-                        
-                        print("射线已更新 - 长度:", distance, "角度:", angle) -- 调试: 确认射线
+                        if distance > 0 then
+                            rayLine.Position = UDim2.new(0, from.X, 0, from.Y)
+                            rayLine.Size = UDim2.new(0, distance, 0, 1) -- X=精确长度, Y=1像素厚度
+                            rayLine.Visible = true
+                            rayStroke.Color = main.fovColor
+                            
+                            -- 旋转线条以匹配方向
+                            local angle = math.atan2(to.Y - from.Y, to.X - from.X) * 180 / math.pi
+                            rayLine.Rotation = angle
+                            
+                            print("射线已更新 - 到身体, 长度:" .. distance .. ", 角度:" .. angle) -- 调试: 确认射线到身体
+                        else
+                            rayLine.Visible = false
+                        end
                     else
                         rayLine.Visible = false
                     end
