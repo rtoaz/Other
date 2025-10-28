@@ -2,12 +2,23 @@ local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local old
+local RunService = game:GetService("RunService")
+local mt = getrawmetatable(game)
+local old_index = mt.__index
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false
+    friendcheck = false,
+    drawline = false
 }
+
+local line = Drawing.new("Line")
+line.Color = Color3.new(1, 0, 0)
+line.Thickness = 2
+line.Transparency = 1
+line.Visible = false
+
+local connection
 
 local function getClosestHead()
     local closestHead
@@ -54,28 +65,54 @@ local function getClosestHead()
     return closestHead
 end
 
-old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
+local drawConnection
+drawConnection = function()
+    if not main.enable or not main.drawline then
+        line.Visible = false
+        return
+    end
 
-    if method == "Raycast" and not checkcaller() then
-        local origin = args[1] or Camera.CFrame.Position
+    local closestHead = getClosestHead()
+    if closestHead then
+        local screenpos, onscreen = Camera:WorldToScreenPoint(closestHead.Position)
+        if onscreen then
+            local centerX = Camera.ViewportSize.X / 2
+            local centerY = Camera.ViewportSize.Y / 2
+            line.From = Vector2.new(centerX, centerY)
+            line.To = Vector2.new(screenpos.X, screenpos.Y)
+            line.Visible = true
+        else
+            line.Visible = false
+        end
+    else
+        line.Visible = false
+    end
+end
 
+mt.__index = newcclosure(function(self, key)
+    if self == Workspace and key == "Raycast" and not checkcaller() then
+        local raycast_func = old_index(self, key)
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
+                return newcclosure(function(origin, direction, params)
+                    local origin_pos = origin or Camera.CFrame.Position
+                    local hitpos = closestHead.Position
+                    local dist = (hitpos - origin_pos).Magnitude
+                    return {
+                        Instance = closestHead,
+                        Position = hitpos,
+                        Normal = (origin_pos - hitpos).Unit,
+                        Material = Enum.Material.Plastic,
+                        Distance = dist
+                    }
+                end)
             end
         end
+        return raycast_func
     end
-    return old(self, ...)
-end))
+    return old_index(self, key)
+end)
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 local Window = WindUI:CreateWindow({
@@ -121,6 +158,27 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
+        if not state then
+            line.Visible = false
+        end
+    end
+})
+
+Main:Toggle({
+    Title = "开启连线",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.drawline = state
+        if state then
+            connection = RunService.Heartbeat:Connect(drawConnection)
+        else
+            if connection then
+                connection:Disconnect()
+                connection = nil
+            end
+            line.Visible = false
+        end
     end
 })
 
