@@ -2,23 +2,12 @@ local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local RunService = game:GetService("RunService")
-local mt = getrawmetatable(game)
-local old_index = mt.__index
+local oldIndex
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false,
-    drawline = false
+    friendcheck = false
 }
-
-local line = Drawing.new("Line")
-line.Color = Color3.new(1, 0, 0)
-line.Thickness = 2
-line.Transparency = 1
-line.Visible = false
-
-local connection
 
 local function getClosestHead()
     local closestHead
@@ -26,9 +15,6 @@ local function getClosestHead()
 
     if not LocalPlayer.Character then return end
     if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
-
-    local cam_pos = Camera.CFrame.Position
-    local look = Camera.CFrame.LookVector
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -49,14 +35,10 @@ local function getClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    local to_head = (head.Position - cam_pos).Unit
-                    local dot = look:Dot(to_head)
-                    if dot > 0 then
-                        local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                        if distance < closestDistance then
-                            closestHead = head
-                            closestDistance = distance
-                        end
+                    local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+                    if distance < closestDistance then
+                        closestHead = head
+                        closestDistance = distance
                     end
                 end
             end
@@ -65,54 +47,62 @@ local function getClosestHead()
     return closestHead
 end
 
-local drawConnection
-drawConnection = function()
-    if not main.enable or not main.drawline then
-        line.Visible = false
-        return
-    end
+-- 使用 __index 元方法钩子来绕过一些检测 hookmetamethod 的反作弊
+local mt = getrawmetatable(game)
+local oldNamecall = mt.__namecall
+setreadonly(mt, false)
 
-    local closestHead = getClosestHead()
-    if closestHead then
-        local screenpos, onscreen = Camera:WorldToScreenPoint(closestHead.Position)
-        if onscreen then
-            local centerX = Camera.ViewportSize.X / 2
-            local centerY = Camera.ViewportSize.Y / 2
-            line.From = Vector2.new(centerX, centerY)
-            line.To = Vector2.new(screenpos.X, screenpos.Y)
-            line.Visible = true
-        else
-            line.Visible = false
-        end
-    else
-        line.Visible = false
-    end
-end
+-- 先钩 __namecall 以处理参数，但结合 __index 来间接修改 Raycast 行为
+mt.__namecall = newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
 
-mt.__index = newcclosure(function(self, key)
-    if self == Workspace and key == "Raycast" and not checkcaller() then
-        local raycast_func = old_index(self, key)
+    if method == "Raycast" and self == Workspace and not checkcaller() then
+        local origin = args[1] or Camera.CFrame.Position
+        local direction = args[2] or Vector3.new(0, 0, -100) -- 默认方向，如果未提供
+
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
-                return newcclosure(function(origin, direction, params)
-                    local origin_pos = origin or Camera.CFrame.Position
-                    local hitpos = closestHead.Position
-                    local dist = (hitpos - origin_pos).Magnitude
-                    return {
-                        Instance = closestHead,
-                        Position = hitpos,
-                        Normal = (origin_pos - hitpos).Unit,
-                        Material = Enum.Material.Plastic,
-                        Distance = dist
-                    }
-                end)
+                return {
+                    Instance = closestHead,
+                    Position = closestHead.Position,
+                    Normal = (origin - closestHead.Position).Unit,
+                    Material = Enum.Material.Plastic,
+                    Distance = (closestHead.Position - origin).Magnitude
+                }
             end
         end
-        return raycast_func
     end
-    return old_index(self, key)
+    return oldNamecall(self, ...)
 end)
+
+-- 额外 __index 钩子示例，用于进一步绕过（如果服务器检测 namecall，可切换到此）
+oldIndex = mt.__index
+mt.__index = newcclosure(function(self, key)
+    if self == Workspace and key == "Raycast" and not checkcaller() then
+        -- 返回一个修改后的 Raycast 函数
+        return newcclosure(function(origin, direction, params)
+            if main.enable then
+                local closestHead = getClosestHead()
+                if closestHead then
+                    return {
+                        Instance = closestHead,
+                        Position = closestHead.Position,
+                        Normal = (origin - closestHead.Position).Unit,
+                        Material = Enum.Material.Plastic,
+                        Distance = (closestHead.Position - origin).Magnitude
+                    }
+                end
+            end
+            -- 回退到原 Raycast
+            return oldIndex(self, key)(origin, direction, params)
+        end)
+    end
+    return oldIndex(self, key)
+end)
+
+setreadonly(mt, true)
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
@@ -159,27 +149,6 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
-        if not state then
-            line.Visible = false
-        end
-    end
-})
-
-Main:Toggle({
-    Title = "开启连线",
-    Image = "bird",
-    Value = false,
-    Callback = function(state)
-        main.drawline = state
-        if state then
-            connection = RunService.Heartbeat:Connect(drawConnection)
-        else
-            if connection then
-                connection:Disconnect()
-                connection = nil
-            end
-            line.Visible = false
-        end
     end
 })
 
