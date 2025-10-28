@@ -7,6 +7,7 @@ local old_namecall
 local old_getrawmetatable
 local main = {
     enable = false,
+    hooked = false,  -- 新增：跟踪是否已hook
     teamcheck = false,
     friendcheck = false,
     currentTargetHead = nil,
@@ -15,12 +16,39 @@ local main = {
     attachment1 = nil
 }
 
--- 保存原始
-old_getrawmetatable = getrawmetatable
-local mt_game = old_getrawmetatable(game)
-local original_namecall = mt_game.__namecall
+-- 保存原始（延迟到启用时）
+local function setupHiding()
+    old_getrawmetatable = getrawmetatable
+    local mt_game = old_getrawmetatable(game)
+    local original_namecall = mt_game.__namecall
 
--- 假 Raycast 结果（用于 namecall）
+    -- 隐藏：Hook getrawmetatable
+    local new_getrawmetatable = newcclosure(function(tbl)
+        if rawequal(tbl, game) then
+            local fake_mt = {}
+            for k, v in pairs(mt_game) do
+                fake_mt[k] = (k == "__namecall") and original_namecall or v
+            end
+            return fake_mt
+        end
+        return old_getrawmetatable(tbl)
+    end)
+    getrawmetatable = new_getrawmetatable
+
+    -- 隐藏：Hook __index for game instance
+    local mt_game_index = getrawmetatable(game).__index or function() end
+    hookmetamethod(game, "__index", newcclosure(function(self, key)
+        if rawequal(self, game) and key == "metatable" then
+            local fake_mt = {}
+            for k, v in pairs(mt_game) do
+                fake_mt[k] = (k == "__namecall" and original_namecall) or v
+            end
+            return fake_mt
+        end
+        return mt_game_index(self, key)
+    end))
+end
+
 local function createFakeRaycastResult(origin, head)
     local hitPos = head.Position
     return {
@@ -32,7 +60,6 @@ local function createFakeRaycastResult(origin, head)
     }
 end
 
--- Beam函数
 local function updateBulletLine(head)
     if not head then return end
     if main.beam then main.beam:Destroy() end
@@ -105,17 +132,16 @@ local function getClosestHead()
     return closestHead
 end
 
--- 主hook：__namecall on game（保持namecall）
-old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
+local function setupNamecallHook()
+    old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
 
-    if rawequal(self, Workspace) and method == "Raycast" then
-        local origin = args[1] or Camera.CFrame.Position
-        local direction = args[2] or (Camera.CFrame.LookVector * 1000)
-        local params = args[3]
+        if rawequal(self, Workspace) and method == "Raycast" and main.enable then
+            local origin = args[1] or Camera.CFrame.Position
+            local direction = args[2] or (Camera.CFrame.LookVector * 1000)
+            local params = args[3]
 
-        if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
                 local hitResult = createFakeRaycastResult(origin, closestHead)
@@ -127,36 +153,9 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
                 return hitResult
             end
         end
-    end
-    return old_namecall(self, ...)
-end))
-
--- 隐藏模式：用__index on game instance 伪装 metatable（增强隐藏）
-local mt_game_index = getrawmetatable(game).__index or function() end
-hookmetamethod(game, "__index", newcclosure(function(self, key)
-    if rawequal(self, game) and key == "metatable" then  -- 拦截潜在 mt 检查
-        -- 返回假 mt，只针对检测
-        local fake_mt = {}
-        for k, v in pairs(mt_game) do
-            fake_mt[k] = (k == "__namecall" and original_namecall) or v
-        end
-        return fake_mt
-    end
-    return mt_game_index(self, key)
-end))
-
--- 额外隐藏：Hook getrawmetatable
-local new_getrawmetatable = newcclosure(function(tbl)
-    if rawequal(tbl, game) then
-        local fake_mt = {}
-        for k, v in pairs(mt_game) do
-            fake_mt[k] = (k == "__namecall") and original_namecall or v
-        end
-        return fake_mt
-    end
-    return old_getrawmetatable(tbl)
-end)
-getrawmetatable = new_getrawmetatable
+        return old_namecall(self, ...)
+    end))
+end
 
 -- 防冻结
 RunService.Stepped:Connect(function()
@@ -165,9 +164,8 @@ RunService.Stepped:Connect(function()
     end
 end)
 
--- UI：移除调试
+-- UI
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
-
 local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
     Icon = "rbxassetid://129260712070622",
@@ -200,6 +198,13 @@ Main:Toggle({
     Image = "bird",
     Value = false,
     Callback = function(state)
+        if state and not main.hooked then
+            -- 先启用隐藏
+            setupHiding()
+            -- 再启用namecall
+            setupNamecallHook()
+            main.hooked = true
+        end
         main.enable = state
     end
 })
