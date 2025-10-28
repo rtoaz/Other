@@ -242,10 +242,11 @@ stroke.Thickness = 3
 stroke.Transparency = 0
 stroke.Parent = fovFrame
 
--- 射线显示使用ScreenGui (模拟线条从屏幕中心到目标屏幕位置)
+-- 射线显示使用ScreenGui (模拟细线条从屏幕中心到目标屏幕位置)
 local rayLine = Instance.new("Frame")
 rayLine.Name = "RayLine"
-rayLine.Size = UDim2.new(0, 1, 0, 1)
+rayLine.AnchorPoint = Vector2.new(0, 0.5) -- 锚点调整以从起点开始
+rayLine.Size = UDim2.new(0, 0, 0, 2) -- 初始细高度 (厚度)
 rayLine.BackgroundTransparency = 1
 rayLine.BorderSizePixel = 0
 rayLine.Visible = false
@@ -259,43 +260,44 @@ rayStroke.Parent = rayLine
 
 RunService.RenderStepped:Connect(function()
     if main.enable then
+        local viewportSize = Camera.ViewportSize
+        local centerPos = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
         
-        -- FOV更新 (固定中心，无需鼠标)
+        -- FOV更新 (独立控制，固定中心)
         if main.fovVisible then
-            local viewportSize = Camera.ViewportSize
             fovFrame.Position = UDim2.new(0.5, -main.fov, 0.5, -main.fov)
             fovFrame.Size = UDim2.new(0, main.fov * 2, 0, main.fov * 2)
             fovFrame.Visible = true
             stroke.Color = main.fovColor
+            print("FOV显示已更新 - 固定中心") -- 调试: 确认FOV独立显示
         else
             fovFrame.Visible = false
         end
         
-        -- 射线更新 (从中心到目标)
+        -- 射线更新 (独立，从中心到目标，模拟细线)
         if main.showRay then
-            local viewportSize = Camera.ViewportSize
-            local centerPos = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
             local closestHead = getClosestHead()
             if closestHead and closestHead.Parent ~= LocalPlayer.Character then
                 local screenPos, onScreen = Camera:WorldToScreenPoint(closestHead.Position)
                 if onScreen then
                     local from = centerPos
                     local to = Vector2.new(screenPos.X, screenPos.Y)
+                    local distance = (to - from).Magnitude
                     
-                    -- 计算线条位置/大小 (从中心到目标)
-                    local minX = math.min(from.X, to.X)
-                    local maxX = math.max(from.X, to.X)
-                    local minY = math.min(from.Y, to.Y)
-                    local maxY = math.max(from.Y, to.Y)
-                    
-                    rayLine.Position = UDim2.new(0, minX, 0, minY)
-                    rayLine.Size = UDim2.new(0, maxX - minX, 0, maxY - minY)
-                    rayLine.Visible = true
-                    rayStroke.Color = main.fovColor
-                    
-                    -- 旋转线条以匹配方向 (使用Rotation)
-                    local angle = math.atan2(to.Y - from.Y, to.X - from.X) * 180 / math.pi
-                    rayLine.Rotation = angle
+                    if distance > 0 then
+                        rayLine.Position = UDim2.new(0, from.X, 0, from.Y)
+                        rayLine.Size = UDim2.new(0, distance, 0, 2) -- X=长度, Y=厚度
+                        rayLine.Visible = true
+                        rayStroke.Color = main.fovColor
+                        
+                        -- 旋转线条以匹配方向
+                        local angle = math.atan2(to.Y - from.Y, to.X - from.X) * 180 / math.pi
+                        rayLine.Rotation = angle
+                        
+                        print("射线已更新 - 长度:", distance, "角度:", angle) -- 调试: 确认射线
+                    else
+                        rayLine.Visible = false
+                    end
                 else
                     rayLine.Visible = false
                 end
@@ -371,7 +373,7 @@ Main:Toggle({  -- FOV开启按钮
     end
 })
 
-Main:Toggle({  -- 新增射线开启按钮
+Main:Toggle({  -- 射线开启按钮
     Title = "显示射线",
     Value = false, -- 初始值
     Type = "Toggle", -- 或 "Checkbox"
