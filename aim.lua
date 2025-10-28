@@ -75,60 +75,78 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
+        -- 过滤问题脚本（防止 WaterGraphics / CameraController 错误）
+        local callingScript = getcallingscript()
+        if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
+            return old_namecall(self, ...)
+        end
+
         if main.enable then
             local closestHead = getClosestHeadInView()
             if closestHead then
                 local hitPos = closestHead.Position
                 local toTarget = hitPos - origin
                 local distance = toTarget.Magnitude
-                if distance == 0 then distance = 0.1 end
+                if distance == 0 then 
+                    distance = 0.1
+                    toTarget = direction or Vector3.new(0, 0, -1)
+                end
 
                 local unitNormal = toTarget.Unit
-                if distance == 0 then unitNormal = direction.Unit end
 
                 print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-                -- 【修复格式兼容】：返回标准 table 结构，兼容 Aero VectorUtil
-                local result = {
-                    Instance = closestHead,
-                    Position = hitPos,
-                    Normal = unitNormal,
-                    Material = Enum.Material.Plastic,
-                    Distance = distance
-                }
-
-                -- 始终构造新参数，排除其他玩家（修复打墙问题）
+                -- 构造测试参数：忽略目标角色
+                local testParams
                 if params then
-                    local newParams = Instance.new("RaycastParams")
-                    newParams.FilterDescendantsInstances = params.FilterDescendantsInstances or {}
-                    newParams.FilterType = Enum.RaycastFilterType.Exclude
-                    newParams.IgnoreWater = params.IgnoreWater or false
+                    testParams = Instance.new("RaycastParams")
+                    testParams.FilterType = params.FilterType
+                    testParams.IgnoreWater = params.IgnoreWater
 
-                    -- 排除所有非目标角色
-                    for _, player in ipairs(Players:GetPlayers()) do
-                        if player.Character and player.Character ~= closestHead.Parent then
-                            table.insert(newParams.FilterDescendantsInstances, player.Character)
+                    -- 复制过滤列表
+                    local filterList = {}
+                    for _, inst in ipairs(params.FilterDescendantsInstances) do
+                        table.insert(filterList, inst)
+                    end
+
+                    -- 调整以忽略目标角色
+                    local targetChar = closestHead.Parent
+                    if params.FilterType == Enum.RaycastFilterType.Exclude then
+                        -- Exclude: 添加目标到排除列表
+                        table.insert(filterList, targetChar)
+                    else
+                        -- Include: 从包含列表移除目标
+                        local targetIndex = table.find(filterList, targetChar)
+                        if targetIndex then
+                            table.remove(filterList, targetIndex)
                         end
                     end
 
-                    -- 穿墙模式：额外排除地图
-                    if main.wallbang then
-                        local terrain = Workspace:FindFirstChildOfClass("Terrain")
-                        if terrain then
-                            table.insert(newParams.FilterDescendantsInstances, terrain)
-                        end
-                        -- 排除更多地图部件（如墙体模型）
-                        for _, obj in ipairs(Workspace:GetChildren()) do
-                            if obj:IsA("Model") and obj.Name == "Map" then  -- 假设地图模型名为 "Map"
-                                table.insert(newParams.FilterDescendantsInstances, obj)
-                            end
-                        end
-                    end
-
-                    return result, newParams
+                    testParams.FilterDescendantsInstances = filterList
+                else
+                    -- 默认参数：排除目标
+                    testParams = Instance.new("RaycastParams")
+                    testParams.FilterType = Enum.RaycastFilterType.Exclude
+                    testParams.FilterDescendantsInstances = {closestHead.Parent}
+                    testParams.IgnoreWater = false
                 end
 
-                return result
+                -- 测试射线：检查路径是否通畅（忽略目标）
+                local testResult = old_namecall(self, origin, toTarget, testParams)
+                local blocked = testResult and testResult.Distance < distance - 0.1
+
+                -- 如果通畅或启用穿墙，则伪造命中
+                if not blocked or main.wallbang then
+                    local result = {
+                        Instance = closestHead,
+                        Position = hitPos,
+                        Normal = unitNormal,
+                        Material = Enum.Material.Plastic,
+                        Distance = distance
+                    }
+                    return result
+                end
+                -- 否则，使用原始射线（打墙）
             end
         end
     end
