@@ -132,11 +132,19 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
             
             if closestHead then
                 print("Raycast 已钩子 - 瞄准头部 (射击上下文)") -- 调试
+                -- 执行原始Raycast以获取真实结果作为备选
+                local originalResult = old_namecall(self, ...)
+                
+                if originalResult then
+                    -- 如果原始有击中，使用它；否则用钩子结果
+                    return originalResult
+                end
+                
                 local hitPosition = closestHead.Position
                 local rayDirection = hitPosition - originPos
                 local distance = rayDirection.Magnitude
-                local normal = rayDirection.Unit * -1 -- 修正为表面法线 (向外指向射线来源)
-                local material = closestHead.Material -- 使用实际材质，避免游戏逻辑异常
+                local normal = rayDirection.Unit * -1 -- 表面法线
+                local material = closestHead.Material
                 
                 -- 为兼容性返回 RaycastResult
                 return RaycastResult.new(closestHead, hitPosition, normal, material, distance)
@@ -248,7 +256,7 @@ Window:EditOpenButton({
 local MainSection = Window:Section({
     Title = "子追",
     Opened = true,
-})
+)
 
 local Main = MainSection:Tab({
     Title = "设置",
