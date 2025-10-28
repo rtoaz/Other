@@ -2,14 +2,14 @@ local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local old_index
+local old_namecall
 local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false
 }
 
--- 提升线程身份到8级（最高级别，用于更强的绕过检测，推荐用Delta）
+-- 提升线程身份到8级（最高级别，用于更强的绕过检测，推荐Delta）
 if set_thread_identity then
     set_thread_identity(8)  -- 最高权限级别
 end
@@ -52,34 +52,36 @@ local function getClosestHead()
     return closestHead
 end
 
--- Hook Workspace 的 metatable __index，而不是 game 的，以更针对性并减少全局泄漏
-local mt = getrawmetatable(Workspace)
-old_index = mt.__index
+-- 回到 __namecall hook，但用 getrawmetatable(game) 更隐蔽（避免直接 hookmetamethod 被检测）
+local mt = getrawmetatable(game)
+old_namecall = mt.__namecall
 setreadonly(mt, false)
 
-local new_index = newcclosure(function(self, key)
-    if not checkcaller() and self == Workspace and typeof(key) == "string" and key == "Raycast" then
-        return newcclosure(function(origin, direction, params)
-            local originPos = origin or Camera.CFrame.Position
+local new_namecall = newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
 
-            if main.enable then
-                local closestHead = getClosestHead()
-                if closestHead then
-                    local hitPos = closestHead.Position
-                    local dir = hitPos - originPos
-                    local unit = dir.Unit
-                    local distance = dir.Magnitude
-                    return RaycastResult.new(closestHead, hitPos, unit, Enum.Material.Plastic, distance)
-                end
+    if method == "Raycast" and self == Workspace and not checkcaller() then
+        local origin = args[1]
+        local direction = args[2]
+        local params = args[3]
+
+        if main.enable then
+            local closestHead = getClosestHead()
+            if closestHead then
+                local hitPos = closestHead.Position
+                local dirVector = (hitPos - (origin or Camera.CFrame.Position)).Unit * ((direction or Vector3.new(0,0,-1000)).Magnitude)
+                local unitNormal = dirVector.Unit
+                local distance = dirVector.Magnitude
+                print("Raycast 追踪到目标: " .. closestHead.Parent.Name)  -- 调试打印
+                return RaycastResult.new(closestHead, hitPos, unitNormal, Enum.Material.Plastic, distance)
             end
-            -- Fallback to original Raycast
-            return old_index(self, key)(origin, direction, params)
-        end)
+        end
     end
-    return old_index(self, key)
+    return old_namecall(self, ...)
 end)
 
-mt.__index = new_index
+mt.__namecall = new_namecall
 setreadonly(mt, true)
 
 -- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
@@ -135,6 +137,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
+        print("子弹追踪已" .. (state and "开启" or "关闭"))  -- 添加打印调试
     end
 })
 
