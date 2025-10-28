@@ -2,7 +2,7 @@ local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local oldIndex
+local old_namecall
 local main = {
     enable = false,
     teamcheck = false,
@@ -47,19 +47,17 @@ local function getClosestHead()
     return closestHead
 end
 
--- 使用 __index 元方法钩子来绕过一些检测 hookmetamethod 的反作弊
+-- 替代 hookmetamethod 的隐蔽方式：直接修改 game 的 metatable
 local mt = getrawmetatable(game)
-local oldNamecall = mt.__namecall
+old_namecall = mt.__namecall
 setreadonly(mt, false)
 
--- 先钩 __namecall 以处理参数，但结合 __index 来间接修改 Raycast 行为
-mt.__namecall = newcclosure(function(self, ...)
+local new_namecall = newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and self == Workspace and not checkcaller() then
+    if method == "Raycast" and not checkcaller() then
         local origin = args[1] or Camera.CFrame.Position
-        local direction = args[2] or Vector3.new(0, 0, -100) -- 默认方向，如果未提供
 
         if main.enable then
             local closestHead = getClosestHead()
@@ -74,34 +72,10 @@ mt.__namecall = newcclosure(function(self, ...)
             end
         end
     end
-    return oldNamecall(self, ...)
+    return old_namecall(self, ...)
 end)
 
--- 额外 __index 钩子示例，用于进一步绕过（如果服务器检测 namecall，可切换到此）
-oldIndex = mt.__index
-mt.__index = newcclosure(function(self, key)
-    if self == Workspace and key == "Raycast" and not checkcaller() then
-        -- 返回一个修改后的 Raycast 函数
-        return newcclosure(function(origin, direction, params)
-            if main.enable then
-                local closestHead = getClosestHead()
-                if closestHead then
-                    return {
-                        Instance = closestHead,
-                        Position = closestHead.Position,
-                        Normal = (origin - closestHead.Position).Unit,
-                        Material = Enum.Material.Plastic,
-                        Distance = (closestHead.Position - origin).Magnitude
-                    }
-                end
-            end
-            -- 回退到原 Raycast
-            return oldIndex(self, key)(origin, direction, params)
-        end)
-    end
-    return oldIndex(self, key)
-end)
-
+mt.__namecall = new_namecall
 setreadonly(mt, true)
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
