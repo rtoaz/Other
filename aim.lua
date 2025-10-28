@@ -102,11 +102,6 @@ setreadonly(mt, true)
 Camera.CameraType = Enum.CameraType.Custom
 Camera.CameraSubject = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") or nil
 
--- 监听角色重生以重设相机
-LocalPlayer.CharacterAdded:Connect(function(char)
-    Camera.CameraSubject = char:WaitForChild("Humanoid")
-end)
-
 -- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
 local cleanEnv = getfenv()
 for k, v in pairs(cleanEnv) do
