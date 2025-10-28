@@ -66,23 +66,39 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 更严格判断相机射线：origin == Camera.CFrame.Position 且 direction.Magnitude 很小（通常 < 10）
+        -- 严格跳过相机射线（防止冻结 + 避免污染其他系统）
         if origin and Camera and origin == Camera.CFrame.Position then
-            if not direction or direction.Magnitude < 10 then
+            if not direction or direction.Magnitude < 50 then
                 return old_namecall(self, ...)
             end
+        end
+
+        -- 额外：跳过 WaterGraphics 相关射线（避免干扰）
+        local callingScript = getcallingscript()
+        if callingScript and callingScript.Name == "WaterGraphics" then
+            return old_namecall(self, ...)
         end
 
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
                 local hitPos = closestHead.Position
-                local toTarget = (hitPos - origin)
+                local toTarget = hitPos - origin
                 local distance = toTarget.Magnitude
+                if distance == 0 then distance = 0.1 end
+
                 local unitNormal = toTarget.Unit
-                local adjustedDirection = unitNormal * distance
+                if distance == 0 then unitNormal = direction.Unit end
+
                 print("Raycast 追踪到目标: " .. closestHead.Parent.Name)  -- 调试打印
-                return RaycastResult.new(closestHead, hitPos, unitNormal, Enum.Material.Plastic, distance)
+                -- 完全标准构造，避免任何 nil
+                return {
+                    Instance = closestHead,
+                    Position = hitPos,
+                    Normal = unitNormal,
+                    Material = Enum.Material.Plastic,
+                    Distance = distance
+                }
             end
         end
     end
