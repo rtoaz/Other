@@ -2,7 +2,7 @@ local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local old_namecall
+local old_index
 local main = {
     enable = false,
     teamcheck = false,
@@ -47,35 +47,34 @@ local function getClosestHead()
     return closestHead
 end
 
--- 替代 hookmetamethod 的隐蔽方式：直接修改 game 的 metatable
+-- 使用 __index 隐藏 hook
 local mt = getrawmetatable(game)
-old_namecall = mt.__namecall
+old_index = mt.__index
 setreadonly(mt, false)
 
-local new_namecall = newcclosure(function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
+local new_index = newcclosure(function(self, key)
+    if not checkcaller() then
+        if typeof(key) == "string" and key == "Raycast" and self == Workspace then
+            return newcclosure(function(...)
+                local args = {...}
+                local origin = args[1] or Camera.CFrame.Position
 
-    if method == "Raycast" and not checkcaller() then
-        local origin = args[1] or Camera.CFrame.Position
-
-        if main.enable then
-            local closestHead = getClosestHead()
-            if closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
-            end
+                if main.enable then
+                    local closestHead = getClosestHead()
+                    if closestHead then
+                        local direction = origin - closestHead.Position
+                        local unit = direction.Unit
+                        local distance = direction.Magnitude
+                        return RaycastResult.new(closestHead, closestHead.Position, unit, Enum.Material.Plastic, distance)
+                    end
+                end
+            end)
         end
     end
-    return old_namecall(self, ...)
+    return old_index(self, key)
 end)
 
-mt.__namecall = new_namecall
+mt.__index = new_index
 setreadonly(mt, true)
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
