@@ -9,7 +9,7 @@ local main = {
     friendcheck = false
 }
 
--- 提升线程身份到8级（最高级别，用于更强的绕过检测，推荐Delta）
+-- 提升线程身份到8级（最高级别，用于更强的绕过检测，如果你的执行器支持）
 if set_thread_identity then
     set_thread_identity(8)  -- 最高权限级别
 end
@@ -52,7 +52,7 @@ local function getClosestHead()
     return closestHead
 end
 
--- 回到 __namecall hook，但用 getrawmetatable(game) 更隐蔽（避免直接 hookmetamethod 被检测）
+-- __namecall hook for Raycast
 local mt = getrawmetatable(game)
 old_namecall = mt.__namecall
 setreadonly(mt, false)
@@ -69,11 +69,25 @@ local new_namecall = newcclosure(function(self, ...)
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
+                -- 检查如果head在params.Blacklist中，跳过（兼容忽略列表）
+                if params and params.FilterType == Enum.RaycastFilterType.Blacklist then
+                    local blacklisted = false
+                    for _, ignore in ipairs(params.FilterDescendantsInstances or {}) do
+                        if closestHead:IsDescendantOf(ignore) then
+                            blacklisted = true
+                            break
+                        end
+                    end
+                    if blacklisted then
+                        return old_namecall(self, ...)
+                    end
+                end
+
                 local hitPos = closestHead.Position
-                local dirVector = (hitPos - (origin or Camera.CFrame.Position)).Unit * ((direction or Vector3.new(0,0,-1000)).Magnitude)
-                local unitNormal = dirVector.Unit
-                local distance = dirVector.Magnitude
-                print("Raycast 追踪到目标: " .. closestHead.Parent.Name)  -- 调试打印
+                local dirVector = (hitPos - origin).Unit * direction.Magnitude
+                local unitNormal = (origin - hitPos).Unit  -- 修正normal为负方向（标准hack）
+                local distance = (hitPos - origin).Magnitude
+                print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. " at distance: " .. distance)  -- 调试
                 return RaycastResult.new(closestHead, hitPos, unitNormal, Enum.Material.Plastic, distance)
             end
         end
@@ -83,6 +97,15 @@ end)
 
 mt.__namecall = new_namecall
 setreadonly(mt, true)
+
+-- 修复相机跟随：强制设置CameraType为Custom（默认跟随玩家）
+Camera.CameraType = Enum.CameraType.Custom
+Camera.CameraSubject = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") or nil
+
+-- 监听角色重生以重设相机
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Camera.CameraSubject = char:WaitForChild("Humanoid")
+end)
 
 -- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
 local cleanEnv = getfenv()
