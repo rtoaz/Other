@@ -66,7 +66,7 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 【修复相机冻结】跳过相机射线（origin 为相机位置时直接返回原逻辑）
+        -- 跳过相机射线（防止相机冻结）
         if origin and Camera and origin == Camera.CFrame.Position then
             return old_namecall(self, ...)
         end
@@ -75,7 +75,7 @@ local new_namecall = newcclosure(function(self, ...)
             local closestHead = getClosestHead()
             if closestHead then
                 local hitPos = closestHead.Position
-                local dirVector = (hitPos - (origin or Camera.CFrame.Position)).Unit * ((direction or Vector3.new(0,0,-1000)).Magnitude)
+                local dirVector = (hitPos - origin).Unit * direction.Magnitude
                 local unitNormal = dirVector.Unit
                 local distance = dirVector.Magnitude
                 print("Raycast 追踪到目标: " .. closestHead.Parent.Name)  -- 调试打印
