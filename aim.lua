@@ -77,9 +77,10 @@ local new_namecall = newcclosure(function(self, ...)
             local closestHead = getClosestHead()
             if closestHead then
                 local hitPos = closestHead.Position
-                local dirVector = (hitPos - origin).Unit * direction.Magnitude
-                local unitNormal = dirVector.Unit
-                local distance = dirVector.Magnitude
+                local toTarget = (hitPos - origin)
+                local distance = toTarget.Magnitude
+                local unitNormal = toTarget.Unit
+                local adjustedDirection = unitNormal * distance
                 print("Raycast 追踪到目标: " .. closestHead.Parent.Name)  -- 调试打印
                 return RaycastResult.new(closestHead, hitPos, unitNormal, Enum.Material.Plastic, distance)
             end
