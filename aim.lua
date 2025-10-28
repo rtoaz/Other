@@ -110,7 +110,7 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
             return old_namecall(self, ...)
         end
         
-        -- 检查是否为射击上下文 (参数过滤自身角色) - 移除无条件设置isShooting=true
+        -- 检查是否为射击上下文 (参数过滤自身角色)
         local isShooting = false
         
         if raycastParams and raycastParams.FilterType == Enum.RaycastFilterType.Blacklist then
@@ -122,8 +122,8 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
             end
         end
         
-        -- 额外检查：如果方向很长且起点不是相机相关，视为射击（但优先参数检查）
-        if not isShooting and direction.Magnitude > 100 then
+        -- 额外检查：如果方向很长且起点不是相机相关，视为射击
+        if not isShooting and direction and direction.Magnitude > 100 then
             isShooting = true
         end
         
@@ -133,11 +133,13 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
             if closestHead then
                 print("Raycast 已钩子 - 瞄准头部 (射击上下文)") -- 调试
                 local hitPosition = closestHead.Position
-                local rayDirection = (hitPosition - originPos).Unit -- 修正normal为射线方向
-                local distance = (hitPosition - originPos).Magnitude
+                local rayDirection = hitPosition - originPos
+                local distance = rayDirection.Magnitude
+                local normal = rayDirection.Unit * -1 -- 修正为表面法线 (向外指向射线来源)
+                local material = closestHead.Material -- 使用实际材质，避免游戏逻辑异常
                 
                 -- 为兼容性返回 RaycastResult
-                return RaycastResult.new(closestHead, hitPosition, rayDirection, Enum.Material.Plastic, distance)
+                return RaycastResult.new(closestHead, hitPosition, normal, material, distance)
             end
         end
     end
@@ -173,7 +175,7 @@ local function getClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
                 
                 if head and humanoid and humanoid.Health > 0 then
-                    -- 关键修复：使用2D屏幕FOV检查，而不是3D距离
+                    -- 使用2D屏幕FOV检查
                     local screenPos, onScreen = Camera:WorldToScreenPoint(head.Position)
                     if onScreen then
                         local screenVector = Vector2.new(screenPos.X, screenPos.Y)
