@@ -66,6 +66,11 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
+        -- 【修复相机冻结】跳过相机射线（origin 为相机位置时直接返回原逻辑）
+        if origin and Camera and origin == Camera.CFrame.Position then
+            return old_namecall(self, ...)
+        end
+
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
@@ -158,28 +163,3 @@ Main:Toggle({
         main.friendcheck = state
     end
 })
-
--- 强制恢复 CameraSubject 和 CFrame 跟随
-local RunService = game:GetService("RunService")
-
-RunService:BindToRenderStep("FixCameraFreeze", Enum.RenderPriority.Camera.Value, function()
-    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-        local camera = Workspace.CurrentCamera
-        
-        if humanoid and humanoid.Health > 0 then
-            camera.CameraSubject = humanoid
-            camera.CameraType = Enum.CameraType.Custom
-        end
-    end
-end)
-
--- 防止游戏反复清空 CameraSubject（双保险）
-task.spawn(function()
-    while task.wait(0.1) do
-        local humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-        if humanoid then
-            Workspace.CurrentCamera.CameraSubject = humanoid
-        end
-    end
-end)
