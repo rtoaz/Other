@@ -7,7 +7,8 @@ local UserInputService = game:GetService("UserInputService")
 
 local main = {
     enable = false,
-    fovVisible = false, -- 新增FOV可见性控制
+    fovVisible = false,
+    showRay = false, -- 新增射线显示控制
     teamcheck = false,
     friendcheck = false,
     fov = 100, -- 可调整FOV (屏幕像素)
@@ -131,23 +132,23 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
         if isShooting then
             local closestHead = getClosestHead()
             
-            if closestHead and closestHead.Parent ~= LocalPlayer.Character then -- 额外排除自身角色
+            if closestHead and closestHead.Parent ~= LocalPlayer.Character then
                 print("Raycast 已钩子 - 瞄准头部 (射击上下文): " .. closestHead.Parent.Name) -- 调试输出目标玩家名
                 -- 执行原始Raycast以获取真实结果作为备选
                 local originalResult = old_namecall(self, ...)
                 
-                if originalResult then
-                    -- 如果原始有击中，使用它；否则用钩子结果
+                if originalResult and originalResult.Instance then
+                    -- 如果原始有击中，使用它（避免子弹消失）
                     return originalResult
                 end
                 
                 local hitPosition = closestHead.Position
                 local rayDirection = hitPosition - originPos
-                local distance = rayDirection.Magnitude
-                local normal = rayDirection.Unit * -1 -- 表面法线
+                local distance = math.min(rayDirection.Magnitude, direction.Magnitude) -- 限制距离不超过原方向长度
+                local normal = (rayDirection.Unit * -1) -- 表面法线
                 local material = closestHead.Material
                 
-                -- 创建假 RaycastResult (使用表模拟属性)
+                -- 创建假 RaycastResult (使用表模拟属性，避免方法调用错误)
                 local fakeResult = {
                     Instance = closestHead,
                     Position = hitPosition,
@@ -158,7 +159,8 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
                 
                 return fakeResult
             else
-                print("无有效目标或锁定到自身 - 跳过钩子") -- 调试
+                print("无有效目标或锁定到自身 - 执行原始Raycast") -- 调试
+                return old_namecall(self, ...) -- 始终返回原始，避免nil导致吞子弹
             end
         end
     end
@@ -213,26 +215,95 @@ local function getClosestHead()
     return closestHead
 end
 
--- FOV 圆圈用于视觉反馈 (绘制在屏幕上) - 修复透明度和可见性
-local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = false
-fovCircle.Radius = main.fov
-fovCircle.Color = main.fovColor
-fovCircle.Thickness = 3 -- 增加厚度以更明显
-fovCircle.Filled = false
-fovCircle.Transparency = 0 -- 设置为0以完全不透明
+-- FOV显示使用ScreenGui (替代Drawing, 更兼容)
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "FOVGui"
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+local fovFrame = Instance.new("Frame")
+fovFrame.Name = "FOVCircle"
+fovFrame.Size = UDim2.new(0, main.fov * 2, 0, main.fov * 2)
+fovFrame.Position = UDim2.new(0.5, -main.fov, 0.5, -main.fov)
+fovFrame.BackgroundTransparency = 1
+fovFrame.BorderSizePixel = 0
+fovFrame.Visible = false
+fovFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0.5, 0)
+corner.Parent = fovFrame
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = main.fovColor
+stroke.Thickness = 3
+stroke.Transparency = 0
+stroke.Parent = fovFrame
+
+-- 射线显示使用ScreenGui (模拟线条从鼠标到目标屏幕位置)
+local rayLine = Instance.new("Frame")
+rayLine.Name = "RayLine"
+rayLine.Size = UDim2.new(0, 1, 0, 1)
+rayLine.BackgroundTransparency = 1
+rayLine.BorderSizePixel = 0
+rayLine.Visible = false
+rayLine.Parent = screenGui
+
+local rayStroke = Instance.new("UIStroke")
+rayStroke.Color = main.fovColor
+rayStroke.Thickness = 2
+rayStroke.Transparency = 0
+rayStroke.Parent = rayLine
 
 RunService.RenderStepped:Connect(function()
-    if main.enable and main.fovVisible then
+    if main.enable then
         local mousePos = UserInputService:GetMouseLocation()
-        fovCircle.Position = Vector2.new(mousePos.X, mousePos.Y)
-        fovCircle.Visible = true
-        fovCircle.Radius = main.fov
-        fovCircle.Color = main.fovColor
-        fovCircle.Transparency = 0 -- 强制不透明
-        -- print("FOV圆圈已更新 - 位置:", mousePos.X, mousePos.Y, "半径:", main.fov) -- 调试输出 (可选关闭)
+        
+        -- FOV更新
+        if main.fovVisible then
+            fovFrame.Position = UDim2.new(0, mousePos.X - main.fov, 0, mousePos.Y - main.fov)
+            fovFrame.Size = UDim2.new(0, main.fov * 2, 0, main.fov * 2)
+            fovFrame.Visible = true
+            stroke.Color = main.fovColor
+        else
+            fovFrame.Visible = false
+        end
+        
+        -- 射线更新
+        if main.showRay then
+            local closestHead = getClosestHead()
+            if closestHead and closestHead.Parent ~= LocalPlayer.Character then
+                local screenPos, onScreen = Camera:WorldToScreenPoint(closestHead.Position)
+                if onScreen then
+                    local from = mousePos
+                    local to = Vector2.new(screenPos.X, screenPos.Y)
+                    
+                    -- 计算线条位置/大小 (从鼠标到目标)
+                    local minX = math.min(from.X, to.X)
+                    local maxX = math.max(from.X, to.X)
+                    local minY = math.min(from.Y, to.Y)
+                    local maxY = math.max(from.Y, to.Y)
+                    
+                    rayLine.Position = UDim2.new(0, minX, 0, minY)
+                    rayLine.Size = UDim2.new(0, maxX - minX, 0, maxY - minY)
+                    rayLine.Visible = true
+                    rayStroke.Color = main.fovColor
+                    
+                    -- 旋转线条以匹配方向 (使用Rotation)
+                    local angle = math.atan2(to.Y - from.Y, to.X - from.X) * 180 / math.pi
+                    rayLine.Rotation = angle
+                else
+                    rayLine.Visible = false
+                end
+            else
+                rayLine.Visible = false
+            end
+        else
+            rayLine.Visible = false
+        end
     else
-        fovCircle.Visible = false
+        fovFrame.Visible = false
+        rayLine.Visible = false
     end
 end)
 
@@ -286,13 +357,23 @@ Main:Toggle({
     end
 })
 
-Main:Toggle({  -- 新增FOV开启按钮
+Main:Toggle({  -- FOV开启按钮
     Title = "开启FOV显示",
     Value = false, -- 初始值
     Type = "Toggle", -- 或 "Checkbox"
     Callback = function(Value)
         main.fovVisible = Value
         print("FOV显示状态:", Value)
+    end
+})
+
+Main:Toggle({  -- 新增射线开启按钮
+    Title = "显示射线",
+    Value = false, -- 初始值
+    Type = "Toggle", -- 或 "Checkbox"
+    Callback = function(Value)
+        main.showRay = Value
+        print("射线显示状态:", Value)
     end
 })
 
@@ -310,7 +391,8 @@ Main:Colorpicker({
     Default = Color3.fromRGB(255, 255, 255), -- 默认白色
     Callback = function(Color, Transparency)
         main.fovColor = Color
-        fovCircle.Transparency = 1 - Transparency -- 同步透明度 (0=不透明, 1=透明)
+        stroke.Transparency = Transparency -- 同步透明度 (0=不透明, 1=透明)
+        rayStroke.Transparency = Transparency
         print("FOV颜色设置为:", Color, "透明度:", Transparency)
     end
 })
