@@ -7,7 +7,7 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    wallbang = false  -- 新增：穿墙开关
+    wallbang = false
 }
 
 -- 提升线程身份到8级（最高级别，用于更强的绕过检测，推荐Delta）
@@ -73,7 +73,7 @@ local new_namecall = newcclosure(function(self, ...)
     if method == "Raycast" and self == Workspace and not checkcaller() then
         local origin = args[1]
         local direction = args[2]
-        local params = args[3]  -- 用于穿墙控制
+        local params = args[3]
 
         if main.enable then
             local closestHead = getClosestHeadInView()
@@ -86,9 +86,9 @@ local new_namecall = newcclosure(function(self, ...)
                 local unitNormal = toTarget.Unit
                 if distance == 0 then unitNormal = direction.Unit end
 
-                print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))  -- 调试打印
+                print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-                -- 构造标准 RaycastResult table
+                -- 【修复格式兼容】：返回标准 table 结构，兼容 Aero VectorUtil
                 local result = {
                     Instance = closestHead,
                     Position = hitPos,
@@ -97,21 +97,34 @@ local new_namecall = newcclosure(function(self, ...)
                     Distance = distance
                 }
 
-                -- 【关键】如果启用穿墙，修改 RaycastParams 忽略所有碰撞
-                if main.wallbang and params then
+                -- 始终构造新参数，排除其他玩家（修复打墙问题）
+                if params then
                     local newParams = Instance.new("RaycastParams")
                     newParams.FilterDescendantsInstances = params.FilterDescendantsInstances or {}
                     newParams.FilterType = Enum.RaycastFilterType.Exclude
-                    newParams.IgnoreWater = params.IgnoreWater
-                    -- 强制忽略所有非目标物体
-                    table.insert(newParams.FilterDescendantsInstances, Workspace)
-                    -- 但保留目标角色（防止自检失败）
-                    for _, descendant in ipairs(closestHead:GetDescendants()) do
-                        if newParams.FilterDescendantsInstances[descendant] then
-                            table.remove(newParams.FilterDescendantsInstances, table.find(newParams.FilterDescendantsInstances, descendant))
+                    newParams.IgnoreWater = params.IgnoreWater or false
+
+                    -- 排除所有非目标角色
+                    for _, player in ipairs(Players:GetPlayers()) do
+                        if player.Character and player.Character ~= closestHead.Parent then
+                            table.insert(newParams.FilterDescendantsInstances, player.Character)
                         end
                     end
-                    -- 返回修改后的结果 + 新参数
+
+                    -- 穿墙模式：额外排除地图
+                    if main.wallbang then
+                        local terrain = Workspace:FindFirstChildOfClass("Terrain")
+                        if terrain then
+                            table.insert(newParams.FilterDescendantsInstances, terrain)
+                        end
+                        -- 排除更多地图部件（如墙体模型）
+                        for _, obj in ipairs(Workspace:GetChildren()) do
+                            if obj:IsA("Model") and obj.Name == "Map" then  -- 假设地图模型名为 "Map"
+                                table.insert(newParams.FilterDescendantsInstances, obj)
+                            end
+                        end
+                    end
+
                     return result, newParams
                 end
 
@@ -159,8 +172,8 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("2E0249"), 
-        Color3.fromHex("9D4EDD")
+        Color3.fromHex("FF0F7B"), 
+        Color3.fromHex("F89B29")
     ),
     Draggable = true,
 })
@@ -202,7 +215,7 @@ Main:Toggle({
 
 Main:Toggle({
     Title = "启用子弹穿墙",
-    Image = "bird",
+    Image = "zap",
     Value = false,
     Callback = function(state)
         main.wallbang = state
