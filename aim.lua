@@ -245,21 +245,12 @@ stroke.Thickness = 3
 stroke.Transparency = 0
 stroke.Parent = fovFrame
 
--- 射线显示使用ScreenGui (模拟细线条从屏幕中心到玩家身体屏幕位置)
-local rayLine = Instance.new("Frame")
-rayLine.Name = "RayLine"
-rayLine.AnchorPoint = Vector2.new(0, 0.5) -- 锚点从起点中间开始
-rayLine.Size = UDim2.new(0, 0, 0, 1) -- 初始细厚度 (Y=1像素)
-rayLine.BackgroundTransparency = 1
-rayLine.BorderSizePixel = 0
+-- 射线显示使用Drawing API (精确线条)
+local rayLine = Drawing.new("Line")
+rayLine.Color = main.fovColor
+rayLine.Thickness = 1 -- 细线条
+rayLine.Transparency = 0
 rayLine.Visible = false
-rayLine.Parent = screenGui
-
-local rayStroke = Instance.new("UIStroke")
-rayStroke.Color = main.fovColor
-rayStroke.Thickness = 1 -- 更细以模拟线条
-rayStroke.Transparency = 0
-rayStroke.Parent = rayLine
 
 RunService.RenderStepped:Connect(function()
     if main.enable then
@@ -273,12 +264,11 @@ RunService.RenderStepped:Connect(function()
             fovFrame.Size = UDim2.new(0, fovSize, 0, fovSize)
             fovFrame.Visible = true
             stroke.Color = main.fovColor
-            print("FOV显示已更新 - 固定中心: X=" .. (viewportSize.X / 2) .. ", Y=" .. (viewportSize.Y / 2)) -- 调试: 确认中心坐标
         else
             fovFrame.Visible = false
         end
         
-        -- 射线更新 (独立，从中心到玩家身体，细线连接)
+        -- 射线更新 (使用Drawing Line，从中心到玩家身体)
         if main.showRay then
             local closestHead = getClosestHead()
             if closestHead and closestHead.Parent ~= LocalPlayer.Character then
@@ -289,22 +279,13 @@ RunService.RenderStepped:Connect(function()
                     if onScreen then
                         local from = centerPos
                         local to = Vector2.new(screenPos.X, screenPos.Y)
-                        local distance = (to - from).Magnitude
                         
-                        if distance > 0 then
-                            rayLine.Position = UDim2.new(0, from.X, 0, from.Y)
-                            rayLine.Size = UDim2.new(0, distance, 0, 1) -- X=精确长度, Y=1像素厚度
-                            rayLine.Visible = true
-                            rayStroke.Color = main.fovColor
-                            
-                            -- 旋转线条以匹配方向
-                            local angle = math.atan2(to.Y - from.Y, to.X - from.X) * 180 / math.pi
-                            rayLine.Rotation = angle
-                            
-                            print("射线已更新 - 到身体, 长度:" .. distance .. ", 角度:" .. angle) -- 调试: 确认射线到身体
-                        else
-                            rayLine.Visible = false
-                        end
+                        rayLine.From = from
+                        rayLine.To = to
+                        rayLine.Color = main.fovColor
+                        rayLine.Visible = true
+                        
+                        print("射线已更新 - Drawing线条到身体") -- 调试: 确认Drawing射线
                     else
                         rayLine.Visible = false
                     end
@@ -408,7 +389,7 @@ Main:Colorpicker({
     Callback = function(Color, Transparency)
         main.fovColor = Color
         stroke.Transparency = Transparency -- 同步透明度 (0=不透明, 1=透明)
-        rayStroke.Transparency = Transparency
+        rayLine.Transparency = Transparency
         print("FOV颜色设置为:", Color, "透明度:", Transparency)
     end
 })
