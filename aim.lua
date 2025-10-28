@@ -146,8 +146,16 @@ old_namecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
                 local normal = rayDirection.Unit * -1 -- 表面法线
                 local material = closestHead.Material
                 
-                -- 为兼容性返回 RaycastResult
-                return RaycastResult.new(closestHead, hitPosition, normal, material, distance)
+                -- 创建假 RaycastResult (使用表模拟属性)
+                local fakeResult = {
+                    Instance = closestHead,
+                    Position = hitPosition,
+                    Normal = normal,
+                    Material = material,
+                    Distance = distance
+                }
+                
+                return fakeResult
             end
         end
     end
@@ -202,22 +210,24 @@ local function getClosestHead()
     return closestHead
 end
 
--- FOV 圆圈用于视觉反馈 (绘制在屏幕上)
+-- FOV 圆圈用于视觉反馈 (绘制在屏幕上) - 修复透明度和可见性
 local fovCircle = Drawing.new("Circle")
 fovCircle.Visible = false
 fovCircle.Radius = main.fov
-fovCircle.Color = main.fovColor -- 默认白色
-fovCircle.Thickness = 2
+fovCircle.Color = main.fovColor
+fovCircle.Thickness = 3 -- 增加厚度以更明显
 fovCircle.Filled = false
-fovCircle.Transparency = 1
+fovCircle.Transparency = 0 -- 设置为0以完全不透明
 
 RunService.RenderStepped:Connect(function()
     if main.enable then
         local mousePos = UserInputService:GetMouseLocation()
         fovCircle.Position = Vector2.new(mousePos.X, mousePos.Y)
         fovCircle.Visible = true
-        fovCircle.Radius = main.fov -- 同步FOV变化
-        fovCircle.Color = main.fovColor -- 同步颜色变化
+        fovCircle.Radius = main.fov
+        fovCircle.Color = main.fovColor
+        fovCircle.Transparency = 0 -- 强制不透明
+        print("FOV圆圈已更新 - 位置:", mousePos.X, mousePos.Y, "半径:", main.fov) -- 调试输出
     else
         fovCircle.Visible = false
     end
@@ -256,7 +266,7 @@ Window:EditOpenButton({
 local MainSection = Window:Section({
     Title = "子追",
     Opened = true,
-)
+})
 
 local Main = MainSection:Tab({
     Title = "设置",
@@ -287,7 +297,8 @@ Main:Colorpicker({
     Default = Color3.fromRGB(255, 255, 255), -- 默认白色
     Callback = function(Color, Transparency)
         main.fovColor = Color
-        print("FOV颜色设置为:", Color)
+        fovCircle.Transparency = 1 - Transparency -- 同步透明度 (0=不透明, 1=透明)
+        print("FOV颜色设置为:", Color, "透明度:", Transparency)
     end
 })
 
