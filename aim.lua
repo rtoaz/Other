@@ -99,31 +99,96 @@ end)
 mt.__namecall = new_namecall
 setreadonly(mt, true)
 
--- 新：相机跟随管理器（用于修复“开启子弹追踪相机冻结不跟随人物”的问题）
--- 说明：
---  * 只在 main.enable == true 时强制确保 CameraType 为 Custom 且 CameraSubject 指向当前角色的 Humanoid。
---  * 通过 RenderStepped 进行检测，但仅在需要修改时才写入 Camera 属性，避免干扰玩家手动切换相机并降低卡顿风险。
-local cameraEnforcerConnection
-cameraEnforcerConnection = RunService.RenderStepped:Connect(function()
-    -- 如果没有角色或摄像机，跳过
-    if not LocalPlayer or not LocalPlayer.Character or not Camera then
-        return
-    end
+-- 新实现：手动相机跟随（在开启子弹追踪时启用），并在关闭时恢复原始相机状态
+local _savedCameraState = {
+    CameraType = nil,
+    CameraSubject = nil,
+    CameraCFrame = nil,
+}
+local manualFollow = {
+    enabled = false,
+    offset = nil, -- Vector3
+}
 
-    -- 只在子弹追踪开启时修正相机，避免无谓干涉
-    if main.enable then
-        local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-        if humanoid then
-            -- 仅在必须时修改，减少写入导致的“冻结”
-            if Camera.CameraType ~= Enum.CameraType.Custom then
-                Camera.CameraType = Enum.CameraType.Custom
-            end
-            if Camera.CameraSubject ~= humanoid then
-                Camera.CameraSubject = humanoid
-            end
+-- helper: try to get a valid root part (HumanoidRootPart preferred)
+local function getLocalRoot()
+    if LocalPlayer and LocalPlayer.Character then
+        return LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Torso") or LocalPlayer.Character:FindFirstChild("UpperTorso")
+    end
+    return nil
+end
+
+-- 启用手动跟随：保存当前相机状态，计算并保存 offset（相机位置相对于角色位置）
+local function enableManualFollow()
+    if manualFollow.enabled then return end
+    local root = getLocalRoot()
+    if not root or not Camera then return end
+
+    -- 保存当前相机状态以便恢复
+    _savedCameraState.CameraType = Camera.CameraType
+    _savedCameraState.CameraSubject = Camera.CameraSubject
+    _savedCameraState.CameraCFrame = Camera.CFrame
+
+    -- 计算并保存偏移（世界空间）
+    manualFollow.offset = Camera.CFrame.Position - root.Position
+
+    -- 切换到 Scriptable，由我们驱动 Camera.CFrame
+    Camera.CameraType = Enum.CameraType.Scriptable
+
+    manualFollow.enabled = true
+end
+
+-- 关闭手动跟随并恢复相机状态
+local function disableManualFollow()
+    if not manualFollow.enabled then return end
+    if Camera then
+        -- 恢复之前保存的相机类型和主体（如果存在）
+        if _savedCameraState.CameraType then
+            Camera.CameraType = _savedCameraState.CameraType
+        end
+        if _savedCameraState.CameraSubject then
+            Camera.CameraSubject = _savedCameraState.CameraSubject
+        end
+        -- 恢复 CFrame（有助于减少跳动）
+        if _savedCameraState.CameraCFrame then
+            Camera.CFrame = _savedCameraState.CameraCFrame
         end
     end
-    -- 当 main.enable == false 时我们不主动恢复或修改相机，让游戏/玩家控制恢复默认行为
+    manualFollow.enabled = false
+    manualFollow.offset = nil
+end
+
+-- RenderStepped 驱动：当手动跟随启用时设置 Camera.CFrame
+RunService.RenderStepped:Connect(function(dt)
+    -- 优先确保 Camera / LocalPlayer 存在
+    if not LocalPlayer or not Camera then return end
+
+    if main.enable then
+        -- 当用户开启子弹追踪时，启用手动跟随（如果尚未启用）
+        if not manualFollow.enabled then
+            enableManualFollow()
+        end
+
+        if manualFollow.enabled then
+            local root = getLocalRoot()
+            if root and manualFollow.offset then
+                -- 计算期望相机位置 = 角色位置 + 偏移（保持与开启时相对位置不变）
+                local targetPos = root.Position
+                local camPos = targetPos + manualFollow.offset
+
+                -- 令摄像机朝向角色中心（保持稳定跟随）
+                Camera.CFrame = CFrame.new(camPos, targetPos)
+            else
+                -- 如果角色丢失，先不要做任何写入（等待下一帧恢复）
+            end
+        end
+    else
+        -- 子弹追踪关闭 -> 如果手动跟随正在运行，恢复原相机并关闭手动跟随
+        if manualFollow.enabled then
+            disableManualFollow()
+        end
+        -- 不对相机做其它干涉，交还给游戏或玩家
+    end
 end)
 
 -- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
