@@ -9,6 +9,11 @@ local main = {
     friendcheck = false
 }
 
+-- 提升线程身份到8级（最高级别，用于更强的绕过检测，推荐用Delta）
+if set_thread_identity then
+    set_thread_identity(8)  -- 最高权限级别
+end
+
 local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
@@ -47,35 +52,43 @@ local function getClosestHead()
     return closestHead
 end
 
--- 使用 __index 隐藏 hook
-local mt = getrawmetatable(game)
+-- Hook Workspace 的 metatable __index，而不是 game 的，以更针对性并减少全局泄漏
+local mt = getrawmetatable(Workspace)
 old_index = mt.__index
 setreadonly(mt, false)
 
 local new_index = newcclosure(function(self, key)
-    if not checkcaller() then
-        if typeof(key) == "string" and key == "Raycast" and self == Workspace then
-            return newcclosure(function(...)
-                local args = {...}
-                local origin = args[1] or Camera.CFrame.Position
+    if not checkcaller() and self == Workspace and typeof(key) == "string" and key == "Raycast" then
+        return newcclosure(function(origin, direction, params)
+            local originPos = origin or Camera.CFrame.Position
 
-                if main.enable then
-                    local closestHead = getClosestHead()
-                    if closestHead then
-                        local direction = origin - closestHead.Position
-                        local unit = direction.Unit
-                        local distance = direction.Magnitude
-                        return RaycastResult.new(closestHead, closestHead.Position, unit, Enum.Material.Plastic, distance)
-                    end
+            if main.enable then
+                local closestHead = getClosestHead()
+                if closestHead then
+                    local hitPos = closestHead.Position
+                    local dir = hitPos - originPos
+                    local unit = dir.Unit
+                    local distance = dir.Magnitude
+                    return RaycastResult.new(closestHead, hitPos, unit, Enum.Material.Plastic, distance)
                 end
-            end)
-        end
+            end
+            -- Fallback to original Raycast
+            return old_index(self, key)(origin, direction, params)
+        end)
     end
     return old_index(self, key)
 end)
 
 mt.__index = new_index
 setreadonly(mt, true)
+
+-- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
+local cleanEnv = getfenv()
+for k, v in pairs(cleanEnv) do
+    if type(k) == "string" and (k:find("hook") or k:find("exploit")) then
+        cleanEnv[k] = nil
+    end
+end
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
