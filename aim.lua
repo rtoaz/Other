@@ -7,13 +7,12 @@ local old_namecall
 local old_getrawmetatable
 local main = {
     enable = false,
-    hooked = false,  -- 新增：跟踪是否已hook
+    hooked = false,
     teamcheck = false,
     friendcheck = false,
     currentTargetHead = nil,
-    beam = nil,
-    attachment0 = nil,
-    attachment1 = nil
+    lastTargetUpdate = 0,  -- 新增：缓存更新时间
+    updateInterval = 0.5   -- 每0.5秒更新目标
 }
 
 -- 保存原始（延迟到启用时）
@@ -38,7 +37,7 @@ local function setupHiding()
     -- 隐藏：Hook __index for game instance
     local mt_game_index = getrawmetatable(game).__index or function() end
     hookmetamethod(game, "__index", newcclosure(function(self, key)
-        if rawequal(self, game) and key == "metatable" then
+        if rawequal(self, key) and key == "metatable" then
             local fake_mt = {}
             for k, v in pairs(mt_game) do
                 fake_mt[k] = (k == "__namecall" and original_namecall) or v
@@ -94,11 +93,19 @@ local function updateBulletLine(head)
     game:GetService("Debris"):AddItem(originPart, 0.1)
 end
 
+-- 优化版：缓存目标，只定期更新
 local function getClosestHead()
+    local now = tick()
+    if now - main.lastTargetUpdate < main.updateInterval then
+        return main.currentTargetHead  -- 用缓存
+    end
+    main.lastTargetUpdate = now
+
     local closestHead
     local closestDistance = math.huge
+    local playerPos = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character.HumanoidRootPart.Position
 
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    if not playerPos then return end
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -119,16 +126,16 @@ local function getClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                    if distance < closestDistance then
+                    local distance = (root.Position - playerPos).Magnitude
+                    if distance < closestDistance and distance < 500 then  -- 新增：限制距离<500，避免远玩家
                         closestHead = head
                         closestDistance = distance
-                        main.currentTargetHead = head
                     end
                 end
             end
         end
     end
+    main.currentTargetHead = closestHead
     return closestHead
 end
 
@@ -142,7 +149,7 @@ local function setupNamecallHook()
             local direction = args[2] or (Camera.CFrame.LookVector * 1000)
             local params = args[3]
 
-            local closestHead = getClosestHead()
+            local closestHead = getClosestHead()  -- 现在用缓存，少调用
             if closestHead then
                 local hitResult = createFakeRaycastResult(origin, closestHead)
                 
@@ -157,10 +164,11 @@ local function setupNamecallHook()
     end))
 end
 
--- 防冻结
-RunService.Stepped:Connect(function()
-    if Camera and Camera.Parent then
-        Camera.CFrame = Camera.CFrame
+-- 移除Stepped连接（防冻结不再需要）；用Heartbeat低频更新目标
+local targetConnection
+RunService.Heartbeat:Connect(function()
+    if main.enable then
+        getClosestHead()  -- 低频触发更新
     end
 end)
 
@@ -199,9 +207,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         if state and not main.hooked then
-            -- 先启用隐藏
             setupHiding()
-            -- 再启用namecall
             setupNamecallHook()
             main.hooked = true
         end
