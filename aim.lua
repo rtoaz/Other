@@ -87,13 +87,13 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 【加强过滤：更严格短距离阈值 < 500，解决射击延迟】
+        -- 【终极过滤：短距离 + 相机位置 + 特定脚本】 - 解决相机冻结 + 错误
         local camPos = Camera.CFrame.Position
         local callingScript = getcallingscript()
         local skip = false
 
-        -- 短距离射线（相机/内部 < 500，枪通常 > 500）
-        if direction and direction.Magnitude < 500 then
+        -- 短距离射线（相机/内部检测通常 < 200）
+        if direction and direction.Magnitude < 200 then
             skip = true
         end
 
@@ -122,22 +122,27 @@ local new_namecall = newcclosure(function(self, ...)
 
             local unitNormal = toTarget.Unit
 
-            -- 【零开销墙检测】：方向点积（<0.98 = 墙挡，阈值微调更精确）
+            print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
+
+            -- 【优化无延迟墙检测】：使用方向点积检查（快速，无额外Raycast）
             local targetDir = toTarget.Unit
             local shotDir = direction.Unit
             local dotProduct = targetDir:Dot(shotDir)
 
             local blocked = false
             if not main.wallbang then
-                if dotProduct < 0.98 then  -- 更严格阈值，减少误判
+                -- 默认不穿墙：如果目标不在射线方向上（dot < 0.95），视为墙挡 → 原始射线
+                if dotProduct < 0.95 then
                     blocked = true
                 end
             end
 
-            -- 如果被墙挡 → 原始射线（打墙，即时射出）
+            -- 如果被墙挡 → 原始射线（打墙）
             if blocked then
+                print("墙体检测: 被挡，执行原始射线（打墙）")
                 return old_namecall(self, origin, direction, params)
             else
+                print("墙体检测: 通畅或穿墙，命中目标")
                 local result = {
                     Instance = closestHead,
                     Position = hitPos,
