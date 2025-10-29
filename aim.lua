@@ -124,7 +124,7 @@ local new_namecall = newcclosure(function(self, ...)
 
             print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-            -- 【修复默认不穿墙】：构造测试参数，检查路径是否通畅
+            -- 【修复穿墙检测】：简化 blocked 判断，确保默认打墙
             local testParams
             if params then
                 testParams = Instance.new("RaycastParams")
@@ -137,12 +137,16 @@ local new_namecall = newcclosure(function(self, ...)
                     table.insert(filterList, inst)
                 end
 
-                -- 调整以忽略目标角色（让射线能“看到”目标，但检测墙）
+                -- 调整以忽略目标角色（测试射线忽略目标，但检测墙）
                 local targetChar = closestHead.Parent
+                local targetIndex = table.find(filterList, targetChar)
                 if params.FilterType == Enum.RaycastFilterType.Exclude then
-                    table.insert(filterList, targetChar)  -- 排除目标，避免自击
+                    -- Exclude: 确保目标被排除
+                    if not targetIndex then
+                        table.insert(filterList, targetChar)
+                    end
                 else
-                    local targetIndex = table.find(filterList, targetChar)
+                    -- Include: 移除目标从包含列表
                     if targetIndex then
                         table.remove(filterList, targetIndex)
                     end
@@ -151,20 +155,21 @@ local new_namecall = newcclosure(function(self, ...)
                 testParams.FilterDescendantsInstances = filterList
             else
                 testParams = Instance.new("RaycastParams")
-                testParams.FilterType = Enum.RaycastFilterType.Exclude
+                testParams.FilterType = Enum.RaycastFilterType.Blacklist  -- 使用 Blacklist 等同 Exclude
                 testParams.FilterDescendantsInstances = {closestHead.Parent}
                 testParams.IgnoreWater = false
             end
 
-            -- 测试射线：从origin到目标，检查是否被墙挡（使用原始old_namecall，避免递归）
+            -- 测试射线：如果击中任何东西（墙），则 blocked = true
             local testResult = old_namecall(self, origin, toTarget, testParams)
-            local blocked = testResult ~= nil and testResult.Distance < (distance - 0.1)
+            local blocked = testResult ~= nil  -- 简化：有击中 = 被墙挡
 
-            -- 如果被墙挡且穿墙关 → 执行原始射线（打墙）
-            -- 否则 → 伪造命中头
+            -- 如果被墙挡且穿墙关 → 原始射线（打墙）
             if blocked and not main.wallbang then
-                return old_namecall(self, origin, direction, params)  -- 原始射线，打墙
+                print("墙体检测: 被挡，执行原始射线（打墙）")
+                return old_namecall(self, origin, direction, params)
             else
+                print("墙体检测: 通畅或穿墙，命中目标")
                 local result = {
                     Instance = closestHead,
                     Position = hitPos,
