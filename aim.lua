@@ -87,34 +87,27 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 严格相机过滤（多条件 OR）
+        -- 【终极过滤：短距离 + 相机位置 + 特定脚本】 - 解决相机冻结 + 错误
         local camPos = Camera.CFrame.Position
         local callingScript = getcallingscript()
-        local isCameraRay = false
+        local skip = false
 
-        if origin and origin == camPos then
-            isCameraRay = true
+        -- 短距离射线（相机/内部检测通常 < 200）
+        if direction and direction.Magnitude < 200 then
+            skip = true
         end
 
-        if callingScript and callingScript:FindFirstAncestor("PlayerScripts") then
-            isCameraRay = true
+        -- 起点接近相机位置
+        if origin and (origin - camPos).Magnitude < 0.1 then
+            skip = true
         end
 
-        if direction and direction.Magnitude < 50 then
-            isCameraRay = true
-        end
-
+        -- 特定问题脚本
         if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
-            isCameraRay = true
+            skip = true
         end
 
-        -- 只针对枪械脚本劫持（Aero DefaultGun）
-        local isGunRay = false
-        if callingScript and (callingScript.Name == "DefaultGun" or callingScript.Parent.Name == "DefaultGun") then
-            isGunRay = true
-        end
-
-        if isCameraRay or not isGunRay then
+        if skip then
             return old_namecall(self, ...)
         end
 
@@ -131,24 +124,15 @@ local new_namecall = newcclosure(function(self, ...)
 
             print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-            -- 简化墙体检测：使用缓存，避免递归
-            local blocked = false
-            if not main.wallbang then
-                -- 快速测试：不使用old_namecall，避免潜在循环
-                -- 改为简单向量检查或跳过（优先稳定性）
-                blocked = false  -- 临时禁用详细检查，总是命中（模拟穿墙但不真正穿）
-            end
-
-            if not blocked or main.wallbang then
-                local result = {
-                    Instance = closestHead,
-                    Position = hitPos,
-                    Normal = unitNormal,
-                    Material = Enum.Material.Plastic,
-                    Distance = distance
-                }
-                return result
-            end
+            -- 简化：始终命中（穿墙开关控制是否忽略墙，但当前总是命中视野内目标）
+            local result = {
+                Instance = closestHead,
+                Position = hitPos,
+                Normal = unitNormal,
+                Material = Enum.Material.Plastic,
+                Distance = distance
+            }
+            return result
         end
     end
     return old_namecall(self, ...)
@@ -234,7 +218,7 @@ Main:Toggle({
 
 Main:Toggle({
     Title = "启用子弹穿墙",
-    Image = "bird",
+    Image = "zap",
     Value = false,
     Callback = function(state)
         main.wallbang = state
