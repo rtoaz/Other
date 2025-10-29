@@ -8,7 +8,7 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    wallbang = false  -- 默认关闭穿墙
+    wallbang = false
 }
 
 -- 提升线程身份到8级（最高级别，用于更强的绕过检测，推荐Delta）
@@ -87,54 +87,44 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
+        -- 【终极过滤：短距离 + 相机位置 + 特定脚本】 - 解决相机冻结 + 错误
+        local camPos = Camera.CFrame.Position
         local callingScript = getcallingscript()
         local skip = false
 
-        -- 【严格过滤：PlayerScripts下非枪脚本跳过 + 渲染脚本跳过】
-        if callingScript and callingScript:FindFirstAncestor("PlayerScripts") then
-            -- 只劫持枪相关脚本
-            if not string.find(callingScript.Name:lower(), "gun") then
-                skip = true
-            end
+        -- 短距离射线（相机/内部检测通常 < 200）
+        if direction and direction.Magnitude < 200 then
+            skip = true
         end
 
-        -- 渲染/相机脚本跳过
+        -- 起点接近相机位置
+        if origin and (origin - camPos).Magnitude < 0.1 then
+            skip = true
+        end
+
+        -- 特定问题脚本
         if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
             skip = true
         end
 
-        if skip or not main.enable or not closestHead then
+        if skip then
             return old_namecall(self, ...)
         end
 
-        local hitPos = closestHead.Position
-        local toTarget = hitPos - origin
-        local distance = toTarget.Magnitude
-        if distance == 0 then 
-            distance = 0.1
-            toTarget = direction or Vector3.new(0, 0, -1)
-        end
+        if main.enable and closestHead then
+            local hitPos = closestHead.Position
+            local toTarget = hitPos - origin
+            local distance = toTarget.Magnitude
+            if distance == 0 then 
+                distance = 0.1
+                toTarget = direction or Vector3.new(0, 0, -1)
+            end
 
-        local unitNormal = toTarget.Unit
+            local unitNormal = toTarget.Unit
 
-        print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
+            print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-        -- 【修复穿透】：测试射线始终Exclude目标角色，检测墙
-        local testParams = Instance.new("RaycastParams")
-        testParams.FilterType = Enum.RaycastFilterType.Exclude
-        testParams.IgnoreWater = params and params.IgnoreWater or false
-        testParams.FilterDescendantsInstances = {closestHead.Parent}  -- 只排除目标角色，击中所有其他（墙等）
-
-        -- 测试射线：如果击中墙（testResult非nil），blocked=true
-        local testResult = old_namecall(self, origin, toTarget, testParams)
-        local blocked = testResult ~= nil
-
-        -- 如果blocked且非穿墙 → 原始射线（打墙，不穿透）
-        if blocked and not main.wallbang then
-            print("墙体检测: 被挡，执行原始射线（打墙）")
-            return old_namecall(self, origin, direction, params)
-        else
-            print("墙体检测: 通畅或穿墙，命中目标")
+            -- 简化：始终命中（穿墙开关控制是否忽略墙，但当前总是命中视野内目标）
             local result = {
                 Instance = closestHead,
                 Position = hitPos,
