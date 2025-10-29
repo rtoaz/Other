@@ -75,16 +75,26 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 【彻底修复相机冻结】：严格过滤相机射线（基于位置 + 方向长度）
+        -- 【终极修复相机冻结】：多层过滤（位置 + 方向 + 调用者）
         local camPos = Camera.CFrame.Position
-        if origin and (origin - camPos).Magnitude < 1 and direction and direction.Magnitude < 100 then
-            return old_namecall(self, ...)
+        local camLook = Camera.CFrame.LookVector
+        if origin and (origin - camPos).Magnitude < 1 and direction then
+            local dirUnit = direction.Unit
+            if dirUnit.Magnitude > 0 and (dirUnit - camLook).Magnitude < 0.01 then  -- 方向匹配相机前向
+                return old_namecall(self, ...)
+            end
+            if direction.Magnitude < 100 then  -- 短距离射线
+                return old_namecall(self, ...)
+            end
         end
 
-        -- 额外过滤问题脚本（WaterGraphics / CameraController）
+        -- 过滤所有相机相关脚本（扩展到 PlayerScripts 下所有）
         local callingScript = getcallingscript()
-        if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
-            return old_namecall(self, ...)
+        if callingScript then
+            local parent = callingScript.Parent
+            if parent and (parent.Name == "CameraController" or parent.Name == "WaterGraphics" or parent:IsA("PlayerScripts")) then
+                return old_namecall(self, ...)
+            end
         end
 
         if main.enable then
