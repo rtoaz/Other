@@ -174,7 +174,7 @@ local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/rel
 
 local Window = WindUI:CreateWindow({
     Title = "子弹追踪",
-    Icon = "rbxassetid://129260712070622",
+    Icon = "rbxassetid://115895976319223",
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
