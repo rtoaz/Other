@@ -6,10 +6,12 @@ local Camera = Workspace.CurrentCamera
 local old
 local main = {
     enable = false,
+    wallbang = false,
     teamcheck = false,
     friendcheck = false,
-    lineWidth = 2,
-    fovAngle = 45
+    fovOnly = true,  -- FOV 限制开关，默认开启
+    fovAngle = 45,
+    fovColor = Color3.fromRGB(255, 255, 255)
 }
 
 -- 缓存变量
@@ -17,14 +19,30 @@ local closestHeadCache = nil
 local lastCacheUpdate = 0
 local cacheInterval = 0.05
 
--- Drawing 对象（用于连线）
-local targetLine = Drawing.new("Line")
-targetLine.Color = Color3.fromRGB(255, 255, 255)  -- 修改：改为白色线条
-targetLine.Transparency = 1
-targetLine.Thickness = main.lineWidth
-targetLine.Visible = false
+-- FOV 圆圈 Drawing 对象
+local fovCircle = Drawing.new("Circle")
+fovCircle.Color = main.fovColor
+fovCircle.Thickness = 2
+fovCircle.NumSides = 100
+fovCircle.Radius = 0
+fovCircle.Filled = false
+fovCircle.Transparency = 1
+fovCircle.Visible = false
 
--- updateClosestHeadCache 函数（不变）
+-- 穿墙检查函数
+local function hasWall(origin, targetPos)
+    local direction = targetPos - origin
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    if closestHeadCache and closestHeadCache.Parent then
+        raycastParams.FilterDescendantsInstances[#raycastParams.FilterDescendantsInstances + 1] = closestHeadCache.Parent
+    end
+    local result = Workspace:Raycast(origin, direction, raycastParams)
+    return result ~= nil and result.Instance ~= closestHeadCache
+end
+
+-- 修改：updateClosestHeadCache，非FOV模式下锁定屏幕中间偏好玩家
 local function updateClosestHeadCache()
     local currentTime = tick()
     if currentTime - lastCacheUpdate < cacheInterval then
@@ -32,7 +50,7 @@ local function updateClosestHeadCache()
     end
     
     local closestHead
-    local closestDistance = math.huge
+    local closestMetric = math.huge  -- 排序指标：FOV模式用3D距离，非FOV用屏幕距离
 
     if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
         closestHeadCache = nil
@@ -41,7 +59,7 @@ local function updateClosestHeadCache()
     end
 
     local localRoot = LocalPlayer.Character.HumanoidRootPart
-    local camPos = Camera.CFrame.Position
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -62,17 +80,30 @@ local function updateClosestHeadCache()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    local distance = (root.Position - localRoot.Position).Magnitude
-                    if distance < closestDistance and distance < 500 then
-                        -- FOV 检查
+                    local distance3D = (root.Position - localRoot.Position).Magnitude
+                    if distance3D < 500 then
                         local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                        local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
                         local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
-                        local fovRadius = math.tan(math.rad(main.fovAngle)) * (Camera.ViewportSize.Y / 2) / math.tan(math.rad(Camera.FieldOfView / 2))
                         
-                        if onScreen and screenDistance < fovRadius then
-                            closestHead = head
-                            closestDistance = distance
+                        if onScreen then  -- 必须在屏幕上可见
+                            local currentMetric
+                            if main.fovOnly then
+                                -- FOV模式：FOV锥内 + 3D距离优先
+                                local fovRadius = math.tan(math.rad(main.fovAngle)) * (Camera.ViewportSize.Y / 2) / math.tan(math.rad(Camera.FieldOfView / 2))
+                                if screenDistance < fovRadius then
+                                    currentMetric = distance3D
+                                else
+                                    continue  -- 不在FOV内，跳过
+                                end
+                            else
+                                -- 非FOV模式：屏幕中间偏好 + 屏幕距离优先
+                                currentMetric = screenDistance
+                            end
+                            
+                            if currentMetric < closestMetric then
+                                closestHead = head
+                                closestMetric = currentMetric
+                            end
                         end
                     end
                 end
@@ -103,42 +134,34 @@ local function stopCacheUpdate()
     end
 end
 
--- RenderStepped 连接（用于绘制连线）
+-- FOV 圆圈更新连接
 local renderConnection
-local function startLineDrawing()
+local function startFOVDrawing()
     if renderConnection then return end
     renderConnection = RunService.RenderStepped:Connect(function()
-        if main.enable then
-            local closestHead = closestHeadCache
-            if closestHead then
-                local camPos = Camera.CFrame.Position
-                local headPos = closestHead.Position
-                
-                -- 更新线条端点
-                local screenFrom, _ = Camera:WorldToViewportPoint(camPos)
-                local screenTo, onScreen = Camera:WorldToViewportPoint(headPos)
-                
-                targetLine.From = Vector2.new(screenFrom.X, screenFrom.Y)
-                targetLine.To = Vector2.new(screenTo.X, screenTo.Y)
-                targetLine.Thickness = main.lineWidth
-                targetLine.Visible = onScreen
-            else
-                targetLine.Visible = false
-            end
+        if main.enable and main.fovOnly then
+            local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+            local fovRadius = math.tan(math.rad(main.fovAngle)) * (Camera.ViewportSize.Y / 2) / math.tan(math.rad(Camera.FieldOfView / 2))
+            
+            fovCircle.Position = screenCenter
+            fovCircle.Radius = fovRadius
+            fovCircle.Color = main.fovColor
+            fovCircle.Visible = true
         else
-            targetLine.Visible = false
+            fovCircle.Visible = false
         end
     end)
 end
 
-local function stopLineDrawing()
+local function stopFOVDrawing()
     if renderConnection then
         renderConnection:Disconnect()
         renderConnection = nil
     end
-    targetLine.Visible = false
+    fovCircle.Visible = false
 end
 
+-- Raycast 钩子
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
@@ -150,15 +173,19 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
             local success, closestHead = pcall(updateClosestHeadCache)
             if success and closestHead then
                 local targetPos = closestHead.Position
-                local direction = (targetPos - origin).Unit
-                if direction.Magnitude > 0 then
-                    return {
-                        Instance = closestHead,
-                        Position = targetPos,
-                        Normal = direction,
-                        Material = Enum.Material.Plastic,
-                        Distance = (targetPos - origin).Magnitude
-                    }
+                local hasObstacle = hasWall(origin, targetPos)
+                
+                if main.wallbang or not hasObstacle then
+                    local direction = (targetPos - origin).Unit
+                    if direction.Magnitude > 0 then
+                        return {
+                            Instance = closestHead,
+                            Position = targetPos,
+                            Normal = direction,
+                            Material = Enum.Material.Plastic,
+                            Distance = (targetPos - origin).Magnitude
+                        }
+                    end
                 end
             end
         end
@@ -171,11 +198,11 @@ local function onEnableChanged(state)
     main.enable = state
     if state then
         startCacheUpdate()
-        startLineDrawing()
+        startFOVDrawing()
         wait(0.1)
     else
         stopCacheUpdate()
-        stopLineDrawing()
+        stopFOVDrawing()
         closestHeadCache = nil
     end
 end
@@ -188,7 +215,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 300),
+    Size = UDim2.fromOffset(300, 320),
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -229,11 +256,25 @@ Main:Toggle({
 })
 
 Main:Toggle({
-    Title = "开启连线显示",
+    Title = "开启穿墙",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.wallbang = state
+        closestHeadCache = nil
+        print("穿墙模式:", state and "开启" or "关闭")
+    end
+})
+
+-- 修改：Toggle 提示，关闭时锁定屏幕中间
+Main:Toggle({
+    Title = "只锁定FOV内玩家",
     Image = "bird",
     Value = true,
     Callback = function(state)
-        targetLine.Visible = state and main.enable
+        main.fovOnly = state
+        closestHeadCache = nil
+        print("锁定模式:", state and "仅FOV内" or "屏幕中间偏好")
     end
 })
 
@@ -258,11 +299,22 @@ Main:Toggle({
 })
 
 Main:Slider({
-    Title = "连线粗细",
-    Value = { Min = 1, Max = 10, Default = 2 },
+    Title = "FOV 大小",
+    Value = { Min = 10, Max = 90, Default = 45 },
     Callback = function(Value)
-        main.lineWidth = Value
-        targetLine.Thickness = Value
-        print("连线粗细:", Value)
+        main.fovAngle = Value
+        closestHeadCache = nil
+        print("FOV 大小:", Value)
+    end
+})
+
+Main:Colorpicker({
+    Title = "FOV 颜色",
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(Color, Transparency)
+        main.fovColor = Color
+        fovCircle.Color = Color
+        fovCircle.Transparency = 1 - Transparency
+        print("FOV 颜色:", Color)
     end
 })
