@@ -11,7 +11,7 @@ local main = {
     wallbang = false
 }
 
--- 提升线程身份到8级（最高级别，用于更强的绕过检测，推荐Delta）
+-- 提升线程身份到8级（最高级别，用于更强的过检测，推荐Delta）
 if set_thread_identity then
     set_thread_identity(8)  -- 最高权限级别
 end
@@ -73,7 +73,7 @@ updateConnection = RunService.Heartbeat:Connect(function()
     end
 end)
 
--- 回到 __namecall hook，但用 getrawmetatable(game) 更隐蔽（避免直接 hookmetamethod 被检测）
+--  __namecall hook，但用 getrawmetatable(game) 
 local mt = getrawmetatable(game)
 old_namecall = mt.__namecall
 setreadonly(mt, false)
@@ -87,7 +87,7 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 【终极过滤：短距离 + 相机位置 + 特定脚本】 - 解决相机冻结 + 错误
+        -- 解决相机冻结 + 错误
         local camPos = Camera.CFrame.Position
         local callingScript = getcallingscript()
         local skip = false
@@ -125,14 +125,35 @@ local new_namecall = newcclosure(function(self, ...)
             print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
             -- 简化：始终命中（穿墙开关控制是否忽略墙，但当前总是命中视野内目标）
-            local result = {
-                Instance = closestHead,
-                Position = hitPos,
-                Normal = unitNormal,
-                Material = Enum.Material.Plastic,
-                Distance = distance
-            }
-            return result
+            if main.wallbang then
+                -- 穿墙开启：保持原来“直接命中头部”的行为
+                local result = {
+                    Instance = closestHead,
+                    Position = hitPos,
+                    Normal = unitNormal,
+                    Material = Enum.Material.Plastic,
+                    Distance = distance
+                }
+                return result
+            else
+                -- 非穿墙：执行真实射线检测，确保路径上没有障碍
+                -- 使用原始的 namecall（old_namecall）来得到真实的射线结果
+                local real = old_namecall(self, origin, toTarget, params)
+
+                -- 如果真实射线直接命中头或头的子对象，则返回真实结果（命中）
+                if real and real.Instance then
+                    -- 若真实命中的是目标或其子对象，直接返回真实结果
+                    if real.Instance == closestHead or real.Instance:IsDescendantOf(closestHead.Parent) then
+                        return real
+                    else
+                        -- 否则真实命中的是墙或其他物体，按真实结果返回（可能为 nil 或其他实例）
+                        return real
+                    end
+                end
+
+                -- 如果真实射线没有命中任何东西（极少数情况），返回真实结果（nil）
+                return real
+            end
         end
     end
     return old_namecall(self, ...)
@@ -175,8 +196,8 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("FF0F7B"), 
-        Color3.fromHex("F89B29")
+        Color3.fromHex("2E0249"), 
+        Color3.fromHex("9D4EDD")
     ),
     Draggable = true,
 })
@@ -218,7 +239,7 @@ Main:Toggle({
 
 Main:Toggle({
     Title = "启用子弹穿墙",
-    Image = "zap",
+    Image = "bird",
     Value = false,
     Callback = function(state)
         main.wallbang = state
