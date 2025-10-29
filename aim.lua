@@ -31,6 +31,11 @@ if Drawing and Drawing.new then
     targetLine.Transparency = 1
 end
 
+-- 枪口偏移阈值（全自动，默认2 studs）
+local skipThreshold = 2
+-- 阈值上限（防止过度增长）
+local maxThreshold = 10
+
 local function isPointInScreen(point)
     local screenPoint, onScreen = Camera:WorldToViewportPoint(point)
     return onScreen and screenPoint.Z > 0
@@ -129,13 +134,23 @@ local new_namecall = newcclosure(function(self, ...)
         local callingScript = getcallingscript()
         local skip = false
 
+        -- 全自动阈值检测逻辑（始终启用）
+        if origin and direction and direction.Magnitude >= 200 then
+            local dist = (origin - camPos).Magnitude
+            local newThreshold = math.max(skipThreshold, dist + 0.5)  -- 缓冲0.5 studs
+            if newThreshold <= maxThreshold then
+                skipThreshold = newThreshold
+                print("自动更新阈值: " .. skipThreshold .. " (基于射击距离: " .. dist .. ")")
+            end
+        end
+
         -- 短距离射线（相机/内部检测通常 < 200）
         if direction and direction.Magnitude < 200 then
             skip = true
         end
 
-        -- 起点接近相机位置
-        if origin and (origin - camPos).Magnitude < 0.1 then
+        -- 起点接近相机位置（使用动态阈值）
+        if origin and (origin - camPos).Magnitude < skipThreshold then
             skip = true
         end
 
