@@ -16,7 +16,7 @@ local main = {
         color = Color3.fromRGB(255, 255, 255) -- 已改为白色
     },
     -- 新增：射线拦截模式（默认为原来的 Raycast）
-    raymode = "Raycast" -- 可选 "Raycast" 或 "Ray.naw"
+    raymode = "Raycast" -- 可选 "Raycast" 或 "Ray.new"
 }
 
 -- 提升线程身份到8级（若环境支持）
@@ -171,11 +171,11 @@ local new_namecall = newcclosure(function(self, ...)
         local callingScript = getcallingscript()
         local skip = false
 
-        if direction and direction.Magnitude < 200 then
+        if direction and direction.Magnitude < 500 then
             skip = true
         end
 
-        if origin and (origin - camPos).Magnitude < 0.1 then
+        if origin and (origin - camPos).Magnitude < 2 then
             skip = true
         end
 
@@ -210,24 +210,17 @@ local new_namecall = newcclosure(function(self, ...)
                 }
                 return result
             else
-                -- 修复：对于非穿墙模式，先检查从origin到head的射线是否有障碍
-                local real_to_target = old_namecall(self, origin, toTarget, params)
-                local original_result = old_namecall(self, origin, direction, params)
+                local real = old_namecall(self, origin, toTarget, params)
 
-                if real_to_target and real_to_target.Distance >= distance then
-                    -- 无障碍，直接返回瞄准头部的结果
-                    local result = {
-                        Instance = closestHead,
-                        Position = hitPos,
-                        Normal = unitNormal,
-                        Material = Enum.Material.Plastic,
-                        Distance = distance
-                    }
-                    return result
-                else
-                    -- 有障碍，返回原始射线结果
-                    return original_result
+                if real and real.Instance then
+                    if real.Instance == closestHead or real.Instance:IsDescendantOf(closestHead.Parent) then
+                        return real
+                    else
+                        return real
+                    end
                 end
+
+                return real
             end
         end
     end
@@ -351,7 +344,7 @@ Main:Toggle({
 -- 模式选择菜单
 Main:Dropdown({
     Title = "模式",
-    Values = { "Raycast", "Ray.naw" },
+    Values = { "Raycast", "Ray.new" },
     Value = "Raycast",
     Multi = false,
     Callback = function(Value)
