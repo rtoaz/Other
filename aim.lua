@@ -14,7 +14,9 @@ local main = {
         enable = false,
         thickness = 1, -- 默认粗细
         color = Color3.fromRGB(255, 255, 255) -- 已改为白色
-    }
+    },
+    -- 新增：射线拦截模式（默认为原来的 Raycast）
+    raymode = "Raycast" -- 可选 "Raycast" 或 "Ray.naw"
 }
 
 -- 提升线程身份到8级（若环境支持）
@@ -159,7 +161,8 @@ local new_namecall = newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and self == Workspace and not checkcaller() then
+    -- 使用 main.raymode 而不是硬编码 "Raycast"
+    if method == main.raymode and self == Workspace and not checkcaller() then
         local origin = args[1]
         local direction = args[2]
         local params = args[3]
@@ -195,7 +198,7 @@ local new_namecall = newcclosure(function(self, ...)
 
             local unitNormal = toTarget.Unit
 
-            print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
+            print(main.raymode .. " 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
             if main.wallbang then
                 local result = {
@@ -335,6 +338,19 @@ Main:Toggle({
             end
             print("目标连线已关闭")
         end
+    end
+})
+
+-- 模式选择菜单
+Main:Dropdown({
+    Title = "模式",
+    Values = { "Raycast", "Ray.naw" },
+    Value = "Raycast",
+    Multi = false,
+    Callback = function(Value)
+        -- 将选择的值保存到 main.raymode，名字必须与 getnamecallmethod() 返回的字符串一致
+        main.raymode = Value
+        print("选中射线方法:", Value)
     end
 })
 
