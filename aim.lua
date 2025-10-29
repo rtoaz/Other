@@ -129,8 +129,8 @@ local new_namecall = newcclosure(function(self, ...)
         local callingScript = getcallingscript()
         local skip = false
 
-        -- 短距离射线（相机/内部检测通常 < 100，根据Roblox FPS游戏典型值调整）
-        if direction and direction.Magnitude < 100 then
+        -- 短距离射线（相机/内部检测通常 < 300，适应更多FPS游戏范围）
+        if direction and direction.Magnitude < 300 then
             skip = true
         end
 
@@ -143,9 +143,9 @@ local new_namecall = newcclosure(function(self, ...)
             return old_namecall(self, ...)
         end
 
-        -- 新增：仅对起点接近相机（<20 studs）的长距离射线应用追踪（全自动适应第一人称枪口/相机射击）
+        -- 起点接近相机（<50 studs，覆盖第一人称枪口偏移及附件问题）
         local dist = origin and (origin - camPos).Magnitude or math.huge
-        if dist > 20 then
+        if dist > 50 then
             return old_namecall(self, ...)
         end
 
@@ -162,7 +162,7 @@ local new_namecall = newcclosure(function(self, ...)
 
             print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-            -- 穿墙开关控制是否忽略墙，但当前总是命中视野内目标
+            -- 简化：始终命中（穿墙开关控制是否忽略墙，但当前总是命中视野内目标）
             if main.wallbang then
                 -- 穿墙开启：保持原来“直接命中头部”的行为
                 local result = {
