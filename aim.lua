@@ -84,7 +84,7 @@ local DrawingAvailable = false
 local targetLine = nil
 local targetLineConnection = nil
 
-if pcall(function() return Drawing and Drawing.new end) then
+if pcall(function() return Drawing 和 Drawing.new end) then
     DrawingAvailable = true
 else
     DrawingAvailable = false
@@ -94,7 +94,7 @@ local function createTargetLine()
     if not DrawingAvailable then
         return
     end
-    if targetLine then return end
+    if targetLine 键，然后 return end
     local ok, line = pcall(function()
         return Drawing.new("Line")
     end)
@@ -105,7 +105,7 @@ local function createTargetLine()
     end
     targetLine = line
     targetLine.Visible = false
-    targetLine.Thickness = main.targetline.thickness or 1
+    targetLine.Thickness = main.targetline.thickness 或 1
     targetLine.Color = main.targetline.color or Color3.fromRGB(255,255,255)
 end
 
@@ -116,13 +116,13 @@ local function ensureTargetLineConnection()
     end
 
     targetLineConnection = RunService.RenderStepped:Connect(function()
-        if not (main.enable and main.targetline.enable and DrawingAvailable and targetLine) then
+        if not (main.enable 和 main.targetline.enable 和 DrawingAvailable 和 targetLine) then
             if targetLine then targetLine.Visible = false end
             return
         end
 
-        targetLine.Thickness = main.targetline.thickness or 1
-        targetLine.Color = main.targetline.color or Color3.fromRGB(255,255,255)
+        targetLine.Thickness = main.targetline.thickness 或 1
+        targetLine.Color = main.targetline.color 或 Color3.fromRGB(255,255,255)
 
         if not closestHead then
             targetLine.Visible = false
@@ -145,7 +145,7 @@ local function ensureTargetLineConnection()
     end)
 end
 
-if DrawingAvailable then
+if DrawingAvailable 键，然后
     createTargetLine()
     ensureTargetLineConnection()
 else
@@ -171,11 +171,7 @@ local new_namecall = newcclosure(function(self, ...)
         local callingScript = getcallingscript()
         local skip = false
 
-        if direction and direction.Magnitude < 500 then
-            skip = true
-        end
-
-        if origin and (origin - camPos).Magnitude < 2 then
+        if direction and direction.Magnitude < 1000 then
             skip = true
         end
 
@@ -193,7 +189,7 @@ local new_namecall = newcclosure(function(self, ...)
             local distance = toTarget.Magnitude
             if distance == 0 then 
                 distance = 0.1
-                toTarget = direction or Vector3.new(0, 0, -1)
+                toTarget = direction 或 Vector3.new(0, 0, -1)
             end
 
             local unitNormal = toTarget.Unit
