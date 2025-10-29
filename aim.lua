@@ -87,18 +87,17 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 【修复渲染停止 + 追踪失效】：严格过滤PlayerScripts下非枪脚本
+        -- 【修复追踪失效】：移除短距离过滤，只用相机位置 + 脚本过滤（枪射线不被误跳）
+        local camPos = Camera.CFrame.Position
         local callingScript = getcallingscript()
         local skip = false
 
-        if callingScript and callingScript:FindFirstAncestor("PlayerScripts") then
-            -- PlayerScripts下：只劫持枪相关脚本（Aero DefaultGun等）
-            if not string.find(callingScript.Name:lower(), "gun") then
-                skip = true
-            end
+        -- 起点接近相机位置（枪origin通常枪口，非相机）
+        if origin and (origin - camPos).Magnitude < 0.1 then
+            skip = true
         end
 
-        -- 额外跳过渲染相关脚本
+        -- 特定问题脚本
         if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
             skip = true
         end
@@ -120,14 +119,14 @@ local new_namecall = newcclosure(function(self, ...)
 
             print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-            -- 【墙检测优化】：点积阈值 0.999（极精确直线匹配）
+            -- 【墙检测优化】：点积阈值 0.99（更精确直线判断）
             local targetDir = toTarget.Unit
             local shotDir = direction.Unit
             local dotProduct = targetDir:Dot(shotDir)
 
             local blocked = false
             if not main.wallbang then
-                if dotProduct < 0.999 then  -- 极严格阈值，确保只直瞄命中
+                if dotProduct < 0.99 then  -- 严格直线匹配
                     blocked = true
                 end
             end
