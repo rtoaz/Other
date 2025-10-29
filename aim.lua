@@ -75,26 +75,33 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 【终极修复相机冻结】：多层过滤（位置 + 方向 + 调用者）
+        -- 【终极相机过滤】：基于位置精确匹配 + PlayerScripts 祖先 + 短方向
         local camPos = Camera.CFrame.Position
-        local camLook = Camera.CFrame.LookVector
-        if origin and (origin - camPos).Magnitude < 1 and direction then
-            local dirUnit = direction.Unit
-            if dirUnit.Magnitude > 0 and (dirUnit - camLook).Magnitude < 0.01 then  -- 方向匹配相机前向
-                return old_namecall(self, ...)
-            end
-            if direction.Magnitude < 100 then  -- 短距离射线
-                return old_namecall(self, ...)
-            end
+        local callingScript = getcallingscript()
+        local isCameraRay = false
+
+        -- 位置精确匹配相机
+        if origin and origin == camPos then
+            isCameraRay = true
         end
 
-        -- 过滤所有相机相关脚本（扩展到 PlayerScripts 下所有）
-        local callingScript = getcallingscript()
-        if callingScript then
-            local parent = callingScript.Parent
-            if parent and (parent.Name == "CameraController" or parent.Name == "WaterGraphics" or parent:IsA("PlayerScripts")) then
-                return old_namecall(self, ...)
-            end
+        -- 脚本在 PlayerScripts 下（Aero 相机逻辑位置）
+        if callingScript and callingScript:FindFirstAncestor("PlayerScripts") then
+            isCameraRay = true
+        end
+
+        -- 方向短或匹配相机前向
+        if direction and direction.Magnitude < 50 then
+            isCameraRay = true
+        end
+
+        if isCameraRay then
+            return old_namecall(self, ...)
+        end
+
+        -- 额外过滤特定脚本名
+        if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
+            return old_namecall(self, ...)
         end
 
         if main.enable then
