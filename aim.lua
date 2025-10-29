@@ -75,7 +75,13 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
-        -- 过滤问题脚本（防止 WaterGraphics / CameraController 错误）
+        -- 【彻底修复相机冻结】：严格过滤相机射线（基于位置 + 方向长度）
+        local camPos = Camera.CFrame.Position
+        if origin and (origin - camPos).Magnitude < 1 and direction and direction.Magnitude < 100 then
+            return old_namecall(self, ...)
+        end
+
+        -- 额外过滤问题脚本（WaterGraphics / CameraController）
         local callingScript = getcallingscript()
         if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
             return old_namecall(self, ...)
@@ -146,7 +152,7 @@ local new_namecall = newcclosure(function(self, ...)
                     }
                     return result
                 end
-                -- 否则，使用原始射线（打墙）
+                -- 否则，使用原始射线（尊重墙体）
             end
         end
     end
@@ -233,7 +239,7 @@ Main:Toggle({
 
 Main:Toggle({
     Title = "启用子弹穿墙",
-    Image = "zap",
+    Image = "bird",
     Value = false,
     Callback = function(state)
         main.wallbang = state
