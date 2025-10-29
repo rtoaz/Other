@@ -9,7 +9,7 @@ local main = {
     wallbang = false,
     teamcheck = false,
     friendcheck = false,
-    fovOnly = false,  -- FOV 限制开关，默认开启
+    fovOnly = false,  -- FOV 限制开关，默认关
     fovAngle = 45,
     fovColor = Color3.fromRGB(255, 255, 255)
 }
