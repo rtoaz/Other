@@ -9,7 +9,7 @@ local main = {
     wallbang = false,
     teamcheck = false,
     friendcheck = false,
-    fovOnly = true,  -- FOV 限制开关，默认开启
+    fovOnly = false,  -- FOV 限制开关，默认开启
     fovAngle = 45,
     fovColor = Color3.fromRGB(255, 255, 255)
 }
@@ -28,6 +28,13 @@ fovCircle.Radius = 0
 fovCircle.Filled = false
 fovCircle.Transparency = 1
 fovCircle.Visible = false
+
+-- 目标连线 Drawing 对象（新增：默认白色，不能通过 UI 修改）
+local targetLine = Drawing.new("Line")
+targetLine.Color = Color3.fromRGB(255, 255, 255) -- 默认白色
+targetLine.Thickness = 2
+targetLine.Transparency = 1
+targetLine.Visible = false
 
 -- 穿墙检查函数
 local function hasWall(origin, targetPos)
@@ -161,6 +168,44 @@ local function stopFOVDrawing()
     fovCircle.Visible = false
 end
 
+-- 新增：目标连线绘制（始终默认白色），独立 RenderStepped 连接
+local targetRenderConnection
+local function startTargetLineDrawing()
+    if targetRenderConnection then return end
+    targetRenderConnection = RunService.RenderStepped:Connect(function()
+        if main.enable then
+            -- 尝试使用缓存的目标（缓存由 Heartbeat 更新）
+            local success, cached = pcall(function() return updateClosestHeadCache() end)
+            local head = (success and cached) and cached or closestHeadCache
+
+            if head and head.Parent then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                    targetLine.From = screenCenter
+                    targetLine.To = Vector2.new(screenPos.X, screenPos.Y)
+                    targetLine.Color = Color3.fromRGB(255, 255, 255) -- 确保为白色
+                    targetLine.Visible = true
+                else
+                    targetLine.Visible = false
+                end
+            else
+                targetLine.Visible = false
+            end
+        else
+            targetLine.Visible = false
+        end
+    end)
+end
+
+local function stopTargetLineDrawing()
+    if targetRenderConnection then
+        targetRenderConnection:Disconnect()
+        targetRenderConnection = nil
+    end
+    targetLine.Visible = false
+end
+
 -- Raycast 钩子
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -199,10 +244,12 @@ local function onEnableChanged(state)
     if state then
         startCacheUpdate()
         startFOVDrawing()
+        startTargetLineDrawing() -- 启动目标连线绘制
         wait(0.1)
     else
         stopCacheUpdate()
         stopFOVDrawing()
+        stopTargetLineDrawing() -- 停止目标连线绘制
         closestHeadCache = nil
     end
 end
@@ -266,11 +313,10 @@ Main:Toggle({
     end
 })
 
--- 修改：Toggle 提示，关闭时锁定屏幕中间
 Main:Toggle({
-    Title = "只锁定FOV内玩家",
+    Title = "FOV",
     Image = "bird",
-    Value = true,
+    Value = false,
     Callback = function(state)
         main.fovOnly = state
         closestHeadCache = nil
