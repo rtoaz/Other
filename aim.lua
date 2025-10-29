@@ -53,7 +53,7 @@ end
 local ValidTargetParts = {"Head", "HumanoidRootPart"}
 
 local function getClosestTarget()
-    local closestTarget
+    local closestCharacter
     local closestDistance = math.huge
     local mousePos = getMousePosition()
 
@@ -77,32 +77,41 @@ local function getClosestTarget()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and humanoid and humanoid.Health > 0 then
-                    local target
-                    if main.targetPart == "Random" then
-                        target = character[ValidTargetParts[math.random(1, #ValidTargetParts)]]
-                    else
-                        target = character:FindFirstChild(main.targetPart)
+                    local screenPos, onScreen = getPositionOnScreen(root.Position)
+                    if not onScreen then continue end
+
+                    local distance = (mousePos - screenPos).Magnitude
+                    if distance > main.fovRadius then continue end
+
+                    local targetPartForVisible = main.targetPart == "Random" and root or character:FindFirstChild(main.targetPart)
+                    if not targetPartForVisible then continue end
+
+                    if main.visiblecheck and not IsPlayerVisible(targetPartForVisible) then
+                        continue
                     end
 
-                    if target then
-                        if main.visiblecheck and not IsPlayerVisible(target) then
-                            continue
-                        end
-
-                        local screenPos, onScreen = getPositionOnScreen(target.Position)
-                        if onScreen then
-                            local distance = (mousePos - screenPos).Magnitude
-                            if distance < main.fovRadius and distance < closestDistance then
-                                closestTarget = target
-                                closestDistance = distance
-                            end
-                        end
+                    if distance < closestDistance then
+                        closestDistance = distance
+                        closestCharacter = character
                     end
                 end
             end
         end
     end
-    return closestTarget
+
+    if closestCharacter then
+        if main.targetPart == "Random" then
+            local randPartName = ValidTargetParts[math.random(1, #ValidTargetParts)]
+            local target = closestCharacter:FindFirstChild(randPartName)
+            if not target then
+                target = closestCharacter:FindFirstChild("HumanoidRootPart")
+            end
+            return target
+        else
+            return closestCharacter:FindFirstChild(main.targetPart)
+        end
+    end
+    return nil
 end
 
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -171,14 +180,14 @@ Window:EditOpenButton({
     Draggable = true,
 })
 
-local MainSection = Window:Section({
+MainSection = Window:Section({
     Title = "子追",
     Opened = true,
 })
 
-local MainTab = MainSection:Tab({ Title = "设置", Icon = "Sword" })
+Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
-MainTab:Toggle({
+Main:Toggle({
     Title = "开启子弹追踪",
     Image = "bird",
     Value = false,
@@ -187,7 +196,7 @@ MainTab:Toggle({
     end
 })
 
-MainTab:Toggle({
+Main:Toggle({
     Title = "开启队伍验证",
     Image = "bird",
     Value = false,
@@ -196,7 +205,7 @@ MainTab:Toggle({
     end
 })
 
-MainTab:Toggle({
+Main:Toggle({
     Title = "开启好友验证",
     Image = "bird",
     Value = false,
@@ -205,7 +214,7 @@ MainTab:Toggle({
     end
 })
 
-MainTab:Toggle({
+Main:Toggle({
     Title = "开启可见验证",
     Image = "bird",
     Value = false,
@@ -214,7 +223,7 @@ MainTab:Toggle({
     end
 })
 
-MainTab:Dropdown({
+Main:Dropdown({
     Title = "目标部位",
     Values = {"Head", "HumanoidRootPart", "Random"},
     Value = "Head",
@@ -224,7 +233,7 @@ MainTab:Dropdown({
     end
 })
 
-MainTab:Slider({
+Main:Slider({
     Title = "命中率 (%)",
     Value = { Min = 0, Max = 100, Default = 100 },
     Callback = function(value)
@@ -232,9 +241,7 @@ MainTab:Slider({
     end
 })
 
-local FOVTab = MainSection:Tab({ Title = "FOV", Icon = "Eye" })
-
-FOVTab:Toggle({
+Main:Toggle({
     Title = "显示FOV圆",
     Image = "bird",
     Value = false,
@@ -243,7 +250,7 @@ FOVTab:Toggle({
     end
 })
 
-FOVTab:Slider({
+Main:Slider({
     Title = "FOV半径",
     Value = { Min = 50, Max = 300, Default = 130 },
     Callback = function(value)
