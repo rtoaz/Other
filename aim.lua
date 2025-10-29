@@ -121,7 +121,7 @@ local new_namecall = newcclosure(function(self, ...)
 
     if method == "Raycast" and self == Workspace and not checkcaller() then
         local origin = args[1]
-        local direction = args[2]
+        local original_dir = args[2]
         local params = args[3]
 
         -- 解决相机冻结 + 错误
@@ -130,7 +130,7 @@ local new_namecall = newcclosure(function(self, ...)
         local skip = false
 
         -- 短距离射线（相机/内部检测通常 < 500，宽松以捕获更多）
-        local dirMag = direction and direction.Magnitude or 0
+        local dirMag = original_dir and original_dir.Magnitude or 0
         if dirMag < 500 then
             skip = true
         end
@@ -156,58 +156,33 @@ local new_namecall = newcclosure(function(self, ...)
             local distance = toTarget.Magnitude
             if distance == 0 then 
                 distance = 0.1
-                toTarget = direction or Vector3.new(0, 0, -1)
+                toTarget = original_dir or Vector3.new(0, 0, -1)
             end
 
-            local unitNormal = toTarget.Unit
+            local unitDir = toTarget.Unit
+            local new_dir = unitDir * (original_dir.Magnitude or distance)
+
+            local target_result = old_namecall(self, origin, new_dir, params)
 
             print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-            -- 穿墙开启：直接命中头部
             if main.wallbang then
+                -- 穿墙：始终返回假头部命中
                 local result = {
                     Instance = closestHead,
                     Position = hitPos,
-                    Normal = unitNormal,
-                    Material = Enum.Material.Plastic,
+                    Normal = -unitDir,
+                    Material = closestHead.Material,
                     Distance = distance
                 }
                 return result
             else
-                -- 非穿墙：先用原始params射向目标，检查是否直接命中
-                local real = old_namecall(self, origin, toTarget, params)
-
-                if real and (real.Instance == closestHead or real.Instance:IsDescendantOf(closestHead.Parent)) then
-                    return real
+                -- 非穿墙：如果射向目标的射线命中目标，返回真实结果；否则返回原始射线结果
+                if target_result and target_result.Instance and (target_result.Instance == closestHead or target_result.Instance:IsDescendantOf(closestHead.Parent)) then
+                    return target_result
                 else
-                    -- 检查可见性：忽略目标角色，射向头部位置
-                    local visParams
-                    if params then
-                        visParams = params:Clone()
-                        visParams.FilterType = Enum.RaycastFilterType.Blacklist
-                        visParams.FilterDescendantsInstances = {closestHead.Parent}
-                    else
-                        visParams = RaycastParams.new()
-                        visParams.FilterType = Enum.RaycastFilterType.Blacklist
-                        visParams.FilterDescendantsInstances = {closestHead.Parent}
-                    end
-
-                    local visResult = old_namecall(self, origin, toTarget, visParams)
-
-                    if not visResult then
-                        -- 可见（无障碍），返回命中头部
-                        local result = {
-                            Instance = closestHead,
-                            Position = hitPos,
-                            Normal = unitNormal,
-                            Material = Enum.Material.Plastic,
-                            Distance = distance
-                        }
-                        return result
-                    else
-                        -- 被挡，返回原始结果（miss或墙）
-                        return real
-                    end
+                    -- 回退到原始射线结果
+                    return old_namecall(self, origin, original_dir, params)
                 end
             end
         end
