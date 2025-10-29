@@ -1,25 +1,34 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")  -- 新增：用于定时更新缓存
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false
+    friendcheck = false,
+    lineWidth = 2,
+    fovAngle = 45
 }
 
--- 新增：缓存变量
+-- 缓存变量
 local closestHeadCache = nil
 local lastCacheUpdate = 0
-local cacheInterval = 0.05  -- 每 0.05 秒更新一次缓存（可调，降低到 0.1 以进一步优化）
+local cacheInterval = 0.05
 
--- 修改：优化 getClosestHead，只更新缓存
+-- Drawing 对象（用于连线）
+local targetLine = Drawing.new("Line")
+targetLine.Color = Color3.fromRGB(255, 255, 255)  -- 修改：改为白色线条
+targetLine.Transparency = 1
+targetLine.Thickness = main.lineWidth
+targetLine.Visible = false
+
+-- updateClosestHeadCache 函数（不变）
 local function updateClosestHeadCache()
     local currentTime = tick()
     if currentTime - lastCacheUpdate < cacheInterval then
-        return closestHeadCache  -- 使用缓存
+        return closestHeadCache
     end
     
     local closestHead
@@ -30,6 +39,9 @@ local function updateClosestHeadCache()
         lastCacheUpdate = currentTime
         return nil
     end
+
+    local localRoot = LocalPlayer.Character.HumanoidRootPart
+    local camPos = Camera.CFrame.Position
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -50,10 +62,18 @@ local function updateClosestHeadCache()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                    if distance < closestDistance and distance < 500 then  -- 新增：距离过滤，避免远距离无效追踪
-                        closestHead = head
-                        closestDistance = distance
+                    local distance = (root.Position - localRoot.Position).Magnitude
+                    if distance < closestDistance and distance < 500 then
+                        -- FOV 检查
+                        local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                        local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                        local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                        local fovRadius = math.tan(math.rad(main.fovAngle)) * (Camera.ViewportSize.Y / 2) / math.tan(math.rad(Camera.FieldOfView / 2))
+                        
+                        if onScreen and screenDistance < fovRadius then
+                            closestHead = head
+                            closestDistance = distance
+                        end
                     end
                 end
             end
@@ -65,7 +85,7 @@ local function updateClosestHeadCache()
     return closestHead
 end
 
--- 新增：RunService 连接，用于定期更新缓存（低开销）
+-- RunService 连接
 local heartbeatConnection
 local function startCacheUpdate()
     if heartbeatConnection then return end
@@ -83,6 +103,42 @@ local function stopCacheUpdate()
     end
 end
 
+-- RenderStepped 连接（用于绘制连线）
+local renderConnection
+local function startLineDrawing()
+    if renderConnection then return end
+    renderConnection = RunService.RenderStepped:Connect(function()
+        if main.enable then
+            local closestHead = closestHeadCache
+            if closestHead then
+                local camPos = Camera.CFrame.Position
+                local headPos = closestHead.Position
+                
+                -- 更新线条端点
+                local screenFrom, _ = Camera:WorldToViewportPoint(camPos)
+                local screenTo, onScreen = Camera:WorldToViewportPoint(headPos)
+                
+                targetLine.From = Vector2.new(screenFrom.X, screenFrom.Y)
+                targetLine.To = Vector2.new(screenTo.X, screenTo.Y)
+                targetLine.Thickness = main.lineWidth
+                targetLine.Visible = onScreen
+            else
+                targetLine.Visible = false
+            end
+        else
+            targetLine.Visible = false
+        end
+    end)
+end
+
+local function stopLineDrawing()
+    if renderConnection then
+        renderConnection:Disconnect()
+        renderConnection = nil
+    end
+    targetLine.Visible = false
+end
+
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
@@ -91,12 +147,11 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local origin = args[1] or Camera.CFrame.Position
 
         if main.enable then
-            -- 修改：使用缓存，并添加 pcall 错误处理
             local success, closestHead = pcall(updateClosestHeadCache)
             if success and closestHead then
                 local targetPos = closestHead.Position
                 local direction = (targetPos - origin).Unit
-                if direction.Magnitude > 0 then  -- 避免 NaN
+                if direction.Magnitude > 0 then
                     return {
                         Instance = closestHead,
                         Position = targetPos,
@@ -111,14 +166,16 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     return old(self, ...)
 end))
 
--- 新增：启用时启动缓存更新
+-- 启用逻辑
 local function onEnableChanged(state)
     main.enable = state
     if state then
         startCacheUpdate()
-        wait(0.1)  -- 新增：轻微延迟，避免瞬间高负载
+        startLineDrawing()
+        wait(0.1)
     else
         stopCacheUpdate()
+        stopLineDrawing()
         closestHeadCache = nil
     end
 end
@@ -131,7 +188,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 270),
+    Size = UDim2.fromOffset(300, 300),
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -167,7 +224,16 @@ Main:Toggle({
     Image = "bird",
     Value = false,
     Callback = function(state)
-        onEnableChanged(state)  -- 修改：使用新函数处理启用逻辑
+        onEnableChanged(state)
+    end
+})
+
+Main:Toggle({
+    Title = "开启连线显示",
+    Image = "bird",
+    Value = true,
+    Callback = function(state)
+        targetLine.Visible = state and main.enable
     end
 })
 
@@ -177,7 +243,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.teamcheck = state
-        closestHeadCache = nil  -- 新增：切换时清缓存
+        closestHeadCache = nil
     end
 })
 
@@ -187,6 +253,16 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.friendcheck = state
-        closestHeadCache = nil  -- 新增：切换时清缓存
+        closestHeadCache = nil
+    end
+})
+
+Main:Slider({
+    Title = "连线粗细",
+    Value = { Min = 1, Max = 10, Default = 2 },
+    Callback = function(Value)
+        main.lineWidth = Value
+        targetLine.Thickness = Value
+        print("连线粗细:", Value)
     end
 })
