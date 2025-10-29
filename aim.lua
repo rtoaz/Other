@@ -1,47 +1,35 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+local RunService = game:GetService("RunService")  -- 新增：用于定时更新缓存
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local old_namecall
+local old
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false,
-    wallbang = false
+    friendcheck = false
 }
 
--- 提升线程身份到8级（最高级别，用于更强的过检测，推荐Delta）
-if set_thread_identity then
-    set_thread_identity(8)  -- 最高权限级别
-end
+-- 新增：缓存变量
+local closestHeadCache = nil
+local lastCacheUpdate = 0
+local cacheInterval = 0.05  -- 每 0.05 秒更新一次缓存（可调，降低到 0.1 以进一步优化）
 
-local closestHead = nil  -- 缓存最近目标，减少hook内计算
-
--- 目标连线配置（默认白色）
-local drawLineEnabled = false
-local lineThickness = 1
-local lineColor = Color3.fromRGB(255, 255, 255) -- 默认白色
-local targetLine = nil
-if Drawing and Drawing.new then
-    targetLine = Drawing.new("Line")
-    targetLine.Visible = false
-    targetLine.Thickness = lineThickness
-    targetLine.Color = lineColor
-    targetLine.Transparency = 1
-end
-
-local function isPointInScreen(point)
-    local screenPoint, onScreen = Camera:WorldToViewportPoint(point)
-    return onScreen and screenPoint.Z > 0
-end
-
-local function updateClosestHead()
-    closestHead = nil
+-- 修改：优化 getClosestHead，只更新缓存
+local function updateClosestHeadCache()
+    local currentTime = tick()
+    if currentTime - lastCacheUpdate < cacheInterval then
+        return closestHeadCache  -- 使用缓存
+    end
+    
+    local closestHead
     local closestDistance = math.huge
 
-    if not LocalPlayer.Character then return end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        closestHeadCache = nil
+        lastCacheUpdate = currentTime
+        return nil
+    end
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -62,146 +50,76 @@ local function updateClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    -- 必须在屏幕内
-                    if isPointInScreen(head.Position) then
-                        local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                        if distance < closestDistance then
-                            closestHead = head
-                            closestDistance = distance
-                        end
+                    local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+                    if distance < closestDistance and distance < 500 then  -- 新增：距离过滤，避免远距离无效追踪
+                        closestHead = head
+                        closestDistance = distance
                     end
                 end
             end
         end
+    end
+    
+    closestHeadCache = closestHead
+    lastCacheUpdate = currentTime
+    return closestHead
+end
+
+-- 新增：RunService 连接，用于定期更新缓存（低开销）
+local heartbeatConnection
+local function startCacheUpdate()
+    if heartbeatConnection then return end
+    heartbeatConnection = RunService.Heartbeat:Connect(function()
+        if main.enable then
+            updateClosestHeadCache()
+        end
+    end)
+end
+
+local function stopCacheUpdate()
+    if heartbeatConnection then
+        heartbeatConnection:Disconnect()
+        heartbeatConnection = nil
     end
 end
 
--- 每帧更新目标（优化性能，避免hook内循环）
-local updateConnection
-updateConnection = RunService.Heartbeat:Connect(function()
-    if main.enable then
-        updateClosestHead()
-    else
-        closestHead = nil
-    end
-end)
-
--- 绘制连线（RenderStepped 确保与渲染同步）
-local lineConnection
-lineConnection = RunService.RenderStepped:Connect(function()
-    if targetLine then
-        -- 当且仅当功能开启、连线开关开启且存在目标且目标在屏幕内时显示连线
-        if main.enable and drawLineEnabled and closestHead and isPointInScreen(closestHead.Position) then
-            local screenPoint, onScreen = Camera:WorldToViewportPoint(closestHead.Position)
-            if onScreen then
-                local from = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2) -- 屏幕中心
-                local to = Vector2.new(screenPoint.X, screenPoint.Y)
-                targetLine.From = from
-                targetLine.To = to
-                targetLine.Thickness = lineThickness
-                targetLine.Color = lineColor
-                targetLine.Visible = true
-            else
-                targetLine.Visible = false
-            end
-        else
-            targetLine.Visible = false
-        end
-    end
-end)
-
---  __namecall hook，但用 getrawmetatable(game) 
-local mt = getrawmetatable(game)
-old_namecall = mt.__namecall
-setreadonly(mt, false)
-
-local new_namecall = newcclosure(function(self, ...)
+old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and self == Workspace and not checkcaller() then
-        local origin = args[1]
-        local direction = args[2]
-        local params = args[3]
+    if method == "Raycast" and not checkcaller() then
+        local origin = args[1] or Camera.CFrame.Position
 
-        -- 解决相机冻结 + 错误
-        local camPos = Camera.CFrame.Position
-        local callingScript = getcallingscript()
-        local skip = false
-
-        -- 短距离射线（相机/内部检测通常 < 200）
-        if direction and direction.Magnitude < 200 then
-            skip = true
-        end
-
-        -- 起点接近相机位置
-        if origin and (origin - camPos).Magnitude < 0.1 then
-            skip = true
-        end
-
-        -- 特定问题脚本
-        if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
-            skip = true
-        end
-
-        if skip then
-            return old_namecall(self, ...)
-        end
-
-        if main.enable and closestHead then
-            local hitPos = closestHead.Position
-            local toTarget = hitPos - origin
-            local distance = toTarget.Magnitude
-            if distance == 0 then 
-                distance = 0.1
-                toTarget = direction or Vector3.new(0, 0, -1)
-            end
-
-            local unitNormal = toTarget.Unit
-
-            -- 简化：始终命中（穿墙开关控制是否忽略墙，但当前总是命中视野内目标）
-            if main.wallbang then
-                -- 穿墙开启：保持原来“直接命中头部”的行为
-                local result = {
-                    Instance = closestHead,
-                    Position = hitPos,
-                    Normal = unitNormal,
-                    Material = Enum.Material.Plastic,
-                    Distance = distance
-                }
-                return result
-            else
-                -- 非穿墙：执行真实射线检测，确保路径上没有障碍
-                -- 使用原始的 namecall（old_namecall）来得到真实的射线结果
-                local real = old_namecall(self, origin, toTarget, params)
-
-                -- 如果真实射线直接命中头或头的子对象，则返回真实结果（命中）
-                if real and real.Instance then
-                    -- 若真实命中的是目标或其子对象，直接返回真实结果
-                    if real.Instance == closestHead or real.Instance:IsDescendantOf(closestHead.Parent) then
-                        return real
-                    else
-                        -- 否则真实命中的是墙或其他物体，按真实结果返回（可能为 nil 或其他实例）
-                        return real
-                    end
+        if main.enable then
+            -- 修改：使用缓存，并添加 pcall 错误处理
+            local success, closestHead = pcall(updateClosestHeadCache)
+            if success and closestHead then
+                local targetPos = closestHead.Position
+                local direction = (targetPos - origin).Unit
+                if direction.Magnitude > 0 then  -- 避免 NaN
+                    return {
+                        Instance = closestHead,
+                        Position = targetPos,
+                        Normal = direction,
+                        Material = Enum.Material.Plastic,
+                        Distance = (targetPos - origin).Magnitude
+                    }
                 end
-
-                -- 如果真实射线没有命中任何东西（极少数情况），返回真实结果（nil）
-                return real
             end
         end
     end
-    return old_namecall(self, ...)
-end)
+    return old(self, ...)
+end))
 
-mt.__namecall = new_namecall
-setreadonly(mt, true)
-
--- 额外：如果检测基于 fenv 泄漏，使用这个来清理环境（可选）
-local cleanEnv = getfenv()
-for k, v in pairs(cleanEnv) do
-    if type(k) == "string" and (k:find("hook") or k:find("exploit")) then
-        cleanEnv[k] = nil
+-- 新增：启用时启动缓存更新
+local function onEnableChanged(state)
+    main.enable = state
+    if state then
+        startCacheUpdate()
+        wait(0.1)  -- 新增：轻微延迟，避免瞬间高负载
+    else
+        stopCacheUpdate()
+        closestHeadCache = nil
     end
 end
 
@@ -231,8 +149,8 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("2E0249"), 
-        Color3.fromHex("9D4EDD")
+        Color3.fromHex("FF0F7B"), 
+        Color3.fromHex("F89B29")
     ),
     Draggable = true,
 })
@@ -249,8 +167,7 @@ Main:Toggle({
     Image = "bird",
     Value = false,
     Callback = function(state)
-        main.enable = state
-        print("子弹追踪已" .. (state and "开启" or "关闭"))
+        onEnableChanged(state)  -- 修改：使用新函数处理启用逻辑
     end
 })
 
@@ -260,6 +177,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.teamcheck = state
+        closestHeadCache = nil  -- 新增：切换时清缓存
     end
 })
 
@@ -269,60 +187,6 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.friendcheck = state
+        closestHeadCache = nil  -- 新增：切换时清缓存
     end
 })
-
-Main:Toggle({
-    Title = "启用子弹穿墙",
-    Image = "bird",
-    Value = false,
-    Callback = function(state)
-        main.wallbang = state
-        print("子弹穿墙已" .. (state and "开启" or "关闭"))
-    end
-})
-
--- 新增：目标连线开关与连线粗细（默认白色）
-Main:Toggle({
-    Title = "显示目标连线",
-    Image = "line",
-    Value = false,
-    Callback = function(state)
-        drawLineEnabled = state
-        if targetLine then
-            targetLine.Visible = state and main.enable and closestHead ~= nil
-        end
-    end
-})
-
-Main:Slider({
-    Title = "连线粗细",
-    Value = { Min = 1, Max = 10, Default = 1 },
-    Callback = function(Value)
-        -- 保证为正整数
-        lineThickness = math.max(1, math.floor(Value))
-        if targetLine then
-            targetLine.Thickness = lineThickness
-        end
-    end
-})
-
--- 强制同步连线初始状态，确保默认关闭（防止 UI 库在创建控件时触发回调造成意外开启）
-drawLineEnabled = false
-if targetLine then
-    targetLine.Visible = false
-    targetLine.Thickness = lineThickness
-    targetLine.Color = lineColor
-end
--- 清理连接
-game:BindToClose(function()
-    if updateConnection then
-        updateConnection:Disconnect()
-    end
-    if lineConnection then
-        lineConnection:Disconnect()
-    end
-    if targetLine then
-        pcall(function() targetLine:Remove() end)
-    end
-end)
