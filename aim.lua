@@ -178,7 +178,7 @@ local MainSection = Window:Section({
 
 local MainTab = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
-Main:Toggle({
+MainTab:Toggle({
     Title = "开启子弹追踪",
     Image = "bird",
     Value = false,
@@ -187,7 +187,7 @@ Main:Toggle({
     end
 })
 
-Main:Toggle({
+MainTab:Toggle({
     Title = "开启队伍验证",
     Image = "bird",
     Value = false,
@@ -196,7 +196,7 @@ Main:Toggle({
     end
 })
 
-Main:Toggle({
+MainTab:Toggle({
     Title = "开启好友验证",
     Image = "bird",
     Value = false,
@@ -205,7 +205,7 @@ Main:Toggle({
     end
 })
 
-Main:Toggle({
+MainTab:Toggle({
     Title = "开启可见验证",
     Image = "bird",
     Value = false,
@@ -214,7 +214,7 @@ Main:Toggle({
     end
 })
 
-Main:Dropdown({
+MainTab:Dropdown({
     Title = "目标部位",
     Values = {"Head", "HumanoidRootPart", "Random"},
     Value = "Head",
@@ -224,7 +224,7 @@ Main:Dropdown({
     end
 })
 
-Main:Slider({
+MainTab:Slider({
     Title = "命中率 (%)",
     Value = { Min = 0, Max = 100, Default = 100 },
     Callback = function(value)
@@ -234,7 +234,7 @@ Main:Slider({
 
 local FOVTab = MainSection:Tab({ Title = "FOV", Icon = "Eye" })
 
-Mian:Toggle({
+FOVTab:Toggle({
     Title = "显示FOV圆",
     Image = "bird",
     Value = false,
@@ -243,7 +243,7 @@ Mian:Toggle({
     end
 })
 
-Mian:Slider({
+FOVTab:Slider({
     Title = "FOV半径",
     Value = { Min = 50, Max = 300, Default = 130 },
     Callback = function(value)
