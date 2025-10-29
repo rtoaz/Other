@@ -119,24 +119,11 @@ local new_namecall = newcclosure(function(self, ...)
 
         print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-        -- 【修复穿透】：构造测试params，排除目标角色，测试真实路径
+        -- 【修复穿透】：测试射线始终Exclude目标角色，检测墙
         local testParams = Instance.new("RaycastParams")
-        if params then
-            testParams.FilterType = params.FilterType
-            testParams.IgnoreWater = params.IgnoreWater
-            local filterList = {}
-            for _, inst in ipairs(params.FilterDescendantsInstances) do
-                table.insert(filterList, inst)
-            end
-            -- 排除目标角色（测试射线忽略玩家，只检测墙）
-            local targetChar = closestHead.Parent
-            table.insert(filterList, targetChar)
-            testParams.FilterDescendantsInstances = filterList
-        else
-            testParams.FilterType = Enum.RaycastFilterType.Exclude
-            testParams.FilterDescendantsInstances = {closestHead.Parent}
-            testParams.IgnoreWater = false
-        end
+        testParams.FilterType = Enum.RaycastFilterType.Exclude
+        testParams.IgnoreWater = params and params.IgnoreWater or false
+        testParams.FilterDescendantsInstances = {closestHead.Parent}  -- 只排除目标角色，击中所有其他（墙等）
 
         -- 测试射线：如果击中墙（testResult非nil），blocked=true
         local testResult = old_namecall(self, origin, toTarget, testParams)
