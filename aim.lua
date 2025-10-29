@@ -82,7 +82,7 @@ local new_namecall = newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and self == Workspace and not checkcaller() then
+    if method == "Raycast" and self == Workspace and checkcaller() then
         local origin = args[1]
         local direction = args[2]
         local params = args[3]
@@ -92,18 +92,18 @@ local new_namecall = newcclosure(function(self, ...)
         local callingScript = getcallingscript()
         local skip = false
 
-        -- 短距离射线（相机/内部检测通常 < 200）
-        if direction and direction.Magnitude < 200 then
+        -- 短距离射线（相机/内部检测通常 < 1000，调整以覆盖更多效果射线）
+        if direction and direction.Magnitude < 1000 then
             skip = true
         end
 
-        -- 起点接近相机位置
-        if origin and (origin - camPos).Magnitude < 0.1 then
+        -- 起点接近相机位置（放宽到 < 5 以覆盖更多相机相关射线）
+        if origin and (origin - camPos).Magnitude < 5 then
             skip = true
         end
 
-        -- 特定问题脚本
-        if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
+        -- 特定问题脚本（添加 VectorUtil 和 TemperedEngine 以匹配堆栈）
+        if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController" or callingScript.Name == "VectorUtil" or callingScript.Name:find("TemperedEngine")) then
             skip = true
         end
 
