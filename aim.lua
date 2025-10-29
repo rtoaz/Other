@@ -87,75 +87,64 @@ local new_namecall = newcclosure(function(self, ...)
         local direction = args[2]
         local params = args[3]
 
+        -- 【修复渲染停止 + 追踪失效】：严格过滤PlayerScripts下非枪脚本
         local callingScript = getcallingscript()
         local skip = false
 
-        -- 【严格过滤：PlayerScripts下非枪脚本跳过 + 渲染脚本跳过】
         if callingScript and callingScript:FindFirstAncestor("PlayerScripts") then
-            -- 只劫持枪相关脚本
+            -- PlayerScripts下：只劫持枪相关脚本（Aero DefaultGun等）
             if not string.find(callingScript.Name:lower(), "gun") then
                 skip = true
             end
         end
 
-        -- 渲染/相机脚本跳过
+        -- 额外跳过渲染相关脚本
         if callingScript and (callingScript.Name == "WaterGraphics" or callingScript.Name == "CameraController") then
             skip = true
         end
 
-        if skip or not main.enable or not closestHead then
+        if skip then
             return old_namecall(self, ...)
         end
 
-        local hitPos = closestHead.Position
-        local toTarget = hitPos - origin
-        local distance = toTarget.Magnitude
-        if distance == 0 then 
-            distance = 0.1
-            toTarget = direction or Vector3.new(0, 0, -1)
-        end
-
-        local unitNormal = toTarget.Unit
-
-        print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
-
-        -- 【修复穿透】：构造测试params，排除目标角色，测试真实路径
-        local testParams = Instance.new("RaycastParams")
-        if params then
-            testParams.FilterType = params.FilterType
-            testParams.IgnoreWater = params.IgnoreWater
-            local filterList = {}
-            for _, inst in ipairs(params.FilterDescendantsInstances) do
-                table.insert(filterList, inst)
+        if main.enable and closestHead then
+            local hitPos = closestHead.Position
+            local toTarget = hitPos - origin
+            local distance = toTarget.Magnitude
+            if distance == 0 then 
+                distance = 0.1
+                toTarget = direction or Vector3.new(0, 0, -1)
             end
-            -- 排除目标角色（测试射线忽略玩家，只检测墙）
-            local targetChar = closestHead.Parent
-            table.insert(filterList, targetChar)
-            testParams.FilterDescendantsInstances = filterList
-        else
-            testParams.FilterType = Enum.RaycastFilterType.Exclude
-            testParams.FilterDescendantsInstances = {closestHead.Parent}
-            testParams.IgnoreWater = false
-        end
 
-        -- 测试射线：如果击中墙（testResult非nil），blocked=true
-        local testResult = old_namecall(self, origin, toTarget, testParams)
-        local blocked = testResult ~= nil
+            local unitNormal = toTarget.Unit
 
-        -- 如果blocked且非穿墙 → 原始射线（打墙，不穿透）
-        if blocked and not main.wallbang then
-            print("墙体检测: 被挡，执行原始射线（打墙）")
-            return old_namecall(self, origin, direction, params)
-        else
-            print("墙体检测: 通畅或穿墙，命中目标")
-            local result = {
-                Instance = closestHead,
-                Position = hitPos,
-                Normal = unitNormal,
-                Material = Enum.Material.Plastic,
-                Distance = distance
-            }
-            return result
+            print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
+
+            -- 【墙检测优化】：点积阈值 0.999（极精确直线匹配）
+            local targetDir = toTarget.Unit
+            local shotDir = direction.Unit
+            local dotProduct = targetDir:Dot(shotDir)
+
+            local blocked = false
+            if not main.wallbang then
+                if dotProduct < 0.999 then  -- 极严格阈值，确保只直瞄命中
+                    blocked = true
+                end
+            end
+
+            -- 如果被墙挡 → 原始射线（打墙）
+            if blocked then
+                return old_namecall(self, origin, direction, params)
+            else
+                local result = {
+                    Instance = closestHead,
+                    Position = hitPos,
+                    Normal = unitNormal,
+                    Material = Enum.Material.Plastic,
+                    Distance = distance
+                }
+                return result
+            end
         end
     end
     return old_namecall(self, ...)
