@@ -31,11 +31,6 @@ if Drawing and Drawing.new then
     targetLine.Transparency = 1
 end
 
--- 枪口偏移阈值（全自动，默认2 studs）
-local skipThreshold = 2
--- 阈值上限（防止过度增长）
-local maxThreshold = 10
-
 local function isPointInScreen(point)
     local screenPoint, onScreen = Camera:WorldToViewportPoint(point)
     return onScreen and screenPoint.Z > 0
@@ -134,23 +129,8 @@ local new_namecall = newcclosure(function(self, ...)
         local callingScript = getcallingscript()
         local skip = false
 
-        -- 全自动阈值检测逻辑（始终启用）
-        if origin and direction and direction.Magnitude >= 200 then
-            local dist = (origin - camPos).Magnitude
-            local newThreshold = math.max(skipThreshold, dist + 0.5)  -- 缓冲0.5 studs
-            if newThreshold <= maxThreshold then
-                skipThreshold = newThreshold
-                print("自动更新阈值: " .. skipThreshold .. " (基于射击距离: " .. dist .. ")")
-            end
-        end
-
-        -- 短距离射线（相机/内部检测通常 < 200）
-        if direction and direction.Magnitude < 200 then
-            skip = true
-        end
-
-        -- 起点接近相机位置（使用动态阈值）
-        if origin and (origin - camPos).Magnitude < skipThreshold then
+        -- 短距离射线（相机/内部检测通常 < 100，根据Roblox FPS游戏典型值调整）
+        if direction and direction.Magnitude < 100 then
             skip = true
         end
 
@@ -160,6 +140,12 @@ local new_namecall = newcclosure(function(self, ...)
         end
 
         if skip then
+            return old_namecall(self, ...)
+        end
+
+        -- 新增：仅对起点接近相机（<20 studs）的长距离射线应用追踪（全自动适应第一人称枪口/相机射击）
+        local dist = origin and (origin - camPos).Magnitude or math.huge
+        if dist > 20 then
             return old_namecall(self, ...)
         end
 
@@ -176,7 +162,7 @@ local new_namecall = newcclosure(function(self, ...)
 
             print("Raycast 追踪到目标: " .. closestHead.Parent.Name .. (main.wallbang and " [穿墙]" or ""))
 
-            -- 简化：始终命中（穿墙开关控制是否忽略墙，但当前总是命中视野内目标）
+            -- 穿墙开关控制是否忽略墙，但当前总是命中视野内目标
             if main.wallbang then
                 -- 穿墙开启：保持原来“直接命中头部”的行为
                 local result = {
