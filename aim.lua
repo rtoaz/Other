@@ -76,16 +76,8 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         Distance = (closestHead.Position - origin).Magnitude
                     }
                 else
-                    -- 关闭穿墙：只改变客户端追踪/视觉，不影响服务器真实碰撞
-                    -- 返回目标头部信息以便客户端追踪显示，但服务器仍然用原始射线判断
-                    local fakeResult = {
-                        Instance = closestHead,
-                        Position = closestHead.Position,
-                        Normal = (origin - closestHead.Position).Unit,
-                        Material = Enum.Material.Plastic,
-                        Distance = (closestHead.Position - origin).Magnitude
-                    }
-                    return fakeResult
+                    -- 关闭穿墙：不返回伪造 Raycast，保持原始逻辑
+                    return old(self, ...)
                 end
             end
         end
