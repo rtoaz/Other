@@ -76,9 +76,10 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         Distance = (closestHead.Position - origin).Magnitude
                     }
                 else
-                    -- 不穿墙：返回头部（仅用于客户端追踪/视觉），不影响服务器命中
-                    -- 这里不调用 old() 修改射线，只用于绘制/追踪
-                    return old(self, ...)
+                    -- 不穿墙：修改射线方向，但不强制命中
+                    local newDirection = (closestHead.Position - origin)
+                    args[2] = newDirection
+                    return old(self, table.unpack(args))
                 end
             end
         end
