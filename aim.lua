@@ -25,7 +25,6 @@ rayParams.FilterType = Enum.RaycastFilterType.Blacklist
 rayParams.FilterDescendantsInstances = {}
 rayParams.IgnoreWater = true
 
--- 6
 local function getClosestHead(origin)
     local closestHead
     local closestScreenDist = math.huge
@@ -65,7 +64,7 @@ local function getClosestHead(origin)
 
                 if head and humanoid and humanoid.Health > 0 then
                     local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
-                    -- 要求 onScreen 为 true：仅锁定那些处于屏幕视野内的目标（即使被遮挡仍视为有效）
+                    -- 要求 onScreen 为 true：仅锁定那些处于屏幕视野内的目标（即使被遮挡仍视为候选）
                     if onScreen and screenPoint.Z > 0 then
                         local screen2 = Vector2.new(screenPoint.X, screenPoint.Y)
                         local screenDist = (screen2 - screenCenter).Magnitude
@@ -83,17 +82,24 @@ local function getClosestHead(origin)
     return closestHead
 end
 
--- 更兼容的 __namecall 钩子（保留原始 direction 长度，保证远近一致性，忽略可见性判断以满足“视角内即锁定”的要求）
+-- 更保守/安全的 __namecall 钩子（只拦截 Workspace:Raycast，类型检查、pcall 回退）
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and not checkcaller() then
-        -- origin = args[1], direction = args[2], params = args[3]（常见签名）
-        local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
+    -- 只拦截 Workspace:Raycast 的调用（避免拦截到其它对象的同名方法）
+    if method == "Raycast" and not checkcaller() and self == Workspace then
+        -- 常见签名：Workspace:Raycast(origin: Vector3, direction: Vector3, params?: RaycastParams)
+        local origin = args[1]
         local origDirection = args[2]
+        local params = args[3]
 
-        -- 仅在开启子弹追踪并存在缓存目标时尝试修改参数
+        -- 类型严格检查：只有当 origin 是 Vector3 时才处理；direction 若存在也应为 Vector3
+        if typeof(origin) ~= "Vector3" or (origDirection ~= nil and typeof(origDirection) ~= "Vector3") then
+            return old(self, ...) -- 回退：不是我们期望的调用签名
+        end
+
+        -- 只有在启用并有缓存目标时尝试修改射线
         if main.enable and cachedTarget then
             local okPos = pcall(function() return cachedTarget.Position end)
             if okPos and cachedTarget.Position then
@@ -125,14 +131,15 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         local newMag = math.max(origMag, neededMag)
                         local newDirection = toTarget.Unit * newMag
 
-                        -- 构造新的参数列表，替换 direction（args[2]）并调用原始方法返回真实结果
+                        -- 用受控签名调用原始方法（不要 table.unpack 原始 args，避免把错误类型重新传出）
                         local ok, result = pcall(function()
-                            return old(self, origin, newDirection, args[3])
+                            return old(self, origin, newDirection, params)
                         end)
 
                         if ok then
-                            return result
+                            return result -- 成功，返回真实 RaycastResult userdata
                         else
+                            -- 如果调用失败，安全回退到原始调用
                             return old(self, ...)
                         end
                     end
@@ -141,7 +148,7 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         end
     end
 
-    -- 默认行为：调用原始方法（未做任何改动）
+    -- 其他情况：调用原始方法（不改动）
     return old(self, ...)
 end))
 
@@ -193,7 +200,7 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("FF0F7B"),  
+        Color3.fromHex("FF0F7B"),
         Color3.fromHex("F89B29")
     ),
     Draggable = true,
@@ -235,8 +242,8 @@ Main:Toggle({
 })
 
 Main:Toggle({
-    Title = "子弹穿墙",
-    Image = "bird",
+    Title = "子弹穿墙（允许穿墙）",
+    Image = "shield",
     Value = false,
     Callback = function(state)
         main.throughWalls = state
@@ -305,7 +312,7 @@ end)
 -- UI: 增加连线开关
 Main:Toggle({
     Title = "显示目标连线",
-    Image = "bird",
+    Image = "eye",
     Value = false,
     Callback = function(state)
         main.drawLine = state
