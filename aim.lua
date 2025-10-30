@@ -7,7 +7,7 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    throughWalls = false, -- 子弹穿墙，默认关闭
+    throughWalls = false, -- 子弹穿墙，默认关闭（保留但在视角内目标时不影响选择）
     hitChance = 100 -- 命中率（百分比），默认100
 }
 
@@ -25,8 +25,12 @@ rayParams.FilterType = Enum.RaycastFilterType.Blacklist
 rayParams.FilterDescendantsInstances = {}
 rayParams.IgnoreWater = true
 
--- 返回：只在视角内的玩家头部，并按屏幕中心优先（越靠近屏幕中心优先）
--- 参数 origin: 可选，射线起点（用于可见性检测）。
+-- 返回：只在“视角内”的玩家头部，并按屏幕中心优先（越靠近屏幕中心优先）
+-- 改动说明：
+--  - 现在我们要求 WorldToViewportPoint 的 onScreen 为 true（即目标在屏幕视野范围内），
+--    即便目标被遮挡（不可见）也会被候选（满足“视角内不可见也锁定”的要求）。
+--  - 如果目标在摄像机视野外（onScreen 为 false），则不会被锁定（满足“视角外不锁定”）。
+--  - 保留 main.throughWalls 字段以兼容之前的 UI，但当目标在视角内时我们**不再**基于可见性（raycast）来排除目标。
 local function getClosestHead(origin)
     local closestHead
     local closestScreenDist = math.huge
@@ -66,32 +70,15 @@ local function getClosestHead(origin)
 
                 if head and humanoid and humanoid.Health > 0 then
                     local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    -- 要求 onScreen 为 true：仅锁定那些处于屏幕视野内的目标（即使被遮挡仍视为有效）
                     if onScreen and screenPoint.Z > 0 then
-                        local unobstructed = true
+                        -- 不再基于射线可见性排除目标：视角内不可见的玩家也会被锁定
+                        local screen2 = Vector2.new(screenPoint.X, screenPoint.Y)
+                        local screenDist = (screen2 - screenCenter).Magnitude
 
-                        -- 只有在 throughWalls 关闭时做可见性检测
-                        if not main.throughWalls then
-                            local direction = head.Position - origin
-                            local ray = Workspace:Raycast(origin, direction, rayParams)
-                            if ray then
-                                if ray.Instance and ray.Instance:IsDescendantOf(character) then
-                                    unobstructed = true
-                                else
-                                    unobstructed = false
-                                end
-                            else
-                                unobstructed = true
-                            end
-                        end
-
-                        if unobstructed then
-                            local screen2 = Vector2.new(screenPoint.X, screenPoint.Y)
-                            local screenDist = (screen2 - screenCenter).Magnitude
-
-                            if screenDist < closestScreenDist then
-                                closestScreenDist = screenDist
-                                closestHead = head
-                            end
+                        if screenDist < closestScreenDist then
+                            closestScreenDist = screenDist
+                            closestHead = head
                         end
                     end
                 end
@@ -135,7 +122,7 @@ RunService.Heartbeat:Connect(function(dt)
     if cacheAccum >= cacheInterval then
         cacheAccum = 0
         if main.enable then
-            -- 使用摄像机位置作为 origin 进行可见性检测
+            -- 使用摄像机位置作为 origin 进行目标筛选（仍会用 WorldToViewportPoint 判断是否在视野内）
             local ok, target = pcall(function()
                 return getClosestHead(Camera and Camera.CFrame.Position or nil)
             end)
@@ -218,8 +205,8 @@ Main:Toggle({
 })
 
 Main:Toggle({
-    Title = "子弹穿墙（允许穿墙）",
-    Image = "shield",
+    Title = "子弹穿墙",
+    Image = "bird",
     Value = false,
     Callback = function(state)
         main.throughWalls = state
@@ -288,7 +275,7 @@ end)
 -- UI: 增加连线开关
 Main:Toggle({
     Title = "显示目标连线",
-    Image = "eye",
+    Image = "bird",
     Value = false,
     Callback = function(state)
         main.drawLine = state
