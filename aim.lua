@@ -7,8 +7,12 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    throughWalls = false -- 子弹穿墙，默认关闭
+    throughWalls = false, -- 子弹穿墙，默认关闭
+    hitChance = 100 -- 命中率（百分比），默认100
 }
+
+-- 随机种子（用于命中率判断）
+math.randomseed(tick())
 
 -- 缓存目标以减少频繁计算（避免卡顿）
 local cachedTarget = nil
@@ -107,14 +111,18 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
 
         if main.enable and cachedTarget then
-            -- 直接返回缓存目标，避免在这里进行昂贵计算
-            return {
-                Instance = cachedTarget,
-                Position = cachedTarget.Position,
-                Normal = (origin - cachedTarget.Position).Unit,
-                Material = Enum.Material.Plastic,
-                Distance = (cachedTarget.Position - origin).Magnitude
-            }
+            -- 命中率判断：生成 1-100 的随机数，当随机值 <= hitChance 时命中（返回目标），否则按原始行为继续
+            local roll = math.random(1, 100)
+            if roll <= main.hitChance then
+                return {
+                    Instance = cachedTarget,
+                    Position = cachedTarget.Position,
+                    Normal = (origin - cachedTarget.Position).Unit,
+                    Material = Enum.Material.Plastic,
+                    Distance = (cachedTarget.Position - origin).Magnitude
+                }
+            end
+            -- 未命中则继续走原始射线（返回老方法）
         end
     end
     return old(self, ...)
@@ -150,7 +158,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 350),
+    Size = UDim2.fromOffset(300, 380),
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -215,6 +223,16 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.throughWalls = state
+    end
+})
+
+-- 命中率滑块（默认 100）
+Main:Slider({
+    Title = "命中率",
+    Value = { Min = 0, Max = 100, Default = 100 },
+    Callback = function(Value)
+        main.hitChance = math.clamp(math.floor(Value), 0, 100)
+        print("命中率:", main.hitChance)
     end
 })
 
