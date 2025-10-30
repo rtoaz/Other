@@ -8,7 +8,8 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    drawline = false -- 新增：控制目标连线显示，默认关闭
+    drawline = false, -- 新增：控制目标连线显示，默认关闭
+    wallbang = false  -- 新增：子弹穿墙控制，默认关闭
 }
 
 -- 返回最优先（视角内且靠近屏幕中心，若中心距离接近则选更近的世界距离）的头部
@@ -157,16 +158,53 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     if method == "Raycast" and not checkcaller() then
         local origin = args[1] or Camera.CFrame.Position
 
+        -- 当启用子弹追踪并找得到目标头时，按 wallbang 设置决定是否穿墙
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
+                -- 如果开启穿墙，直接替换结果（穿墙）
+                if main.wallbang then
+                    return {
+                        Instance = closestHead,
+                        Position = closestHead.Position,
+                        Normal = (origin - closestHead.Position).Unit,
+                        Material = Enum.Material.Plastic,
+                        Distance = (closestHead.Position - origin).Magnitude
+                    }
+                else
+                    -- 未开启穿墙：先执行原始 Raycast，检查是否在到达目标前命中其它物体
+                    local originalResult = old(self, ...)
+                    if originalResult and originalResult.Instance then
+                        -- 如果原始命中的是目标头（或其子级），则返回原始命中结果（或用目标结果）
+                        local hit = originalResult.Instance
+                        local anc = hit
+                        local hitIsTarget = false
+                        while anc do
+                            if anc == closestHead then
+                                hitIsTarget = true
+                                break
+                            end
+                            anc = anc.Parent
+                        end
+
+                        if hitIsTarget then
+                            -- 原始已经击中目标头，保留原始结果（更安全）
+                            return originalResult
+                        else
+                            -- 原始在到达目标前命中了别的东西 --> 不替换（不穿墙）
+                            return originalResult
+                        end
+                    else
+                        -- 原始没有命中任何东西，允许替换为目标（即不会被遮挡）
+                        return {
+                            Instance = closestHead,
+                            Position = closestHead.Position,
+                            Normal = (origin - closestHead.Position).Unit,
+                            Material = Enum.Material.Plastic,
+                            Distance = (closestHead.Position - origin).Magnitude
+                        }
+                    end
+                end
             end
         end
     end
@@ -246,6 +284,16 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.drawline = state
+    end
+})
+
+-- 新增：子弹穿墙开关
+Main:Toggle({
+    Title = "子弹穿墙",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.wallbang = state
     end
 })
 
