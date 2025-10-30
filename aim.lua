@@ -12,19 +12,6 @@ local main = {
     line = false
 }
 
-local function isVisible(origin, targetPos, targetChar)
-    local direction = (targetPos - origin)
-    local distance = direction.Magnitude
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {LocalPlayer.Character}
-    local result = Workspace:Raycast(origin, direction, params)
-    if result then
-        return result.Instance:IsDescendantOf(targetChar)
-    end
-    return false
-end
-
 local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
@@ -51,7 +38,7 @@ local function getClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    local viewportPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    local _, onScreen = Camera:WorldToViewportPoint(head.Position)
                     if onScreen then
                         local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
                         if distance < closestDistance then
@@ -65,6 +52,17 @@ local function getClosestHead()
         end
     end
     return closestHead, closestChar
+end
+
+local function isVisible(origin, targetPos, targetChar)
+    local direction = (targetPos - origin)
+    local distance = direction.Magnitude
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {LocalPlayer.Character, targetChar}
+    local rayDir = direction.Unit * distance
+    local result = Workspace:Raycast(origin, rayDir, params)
+    return not result
 end
 
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -83,22 +81,27 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                 local distToHead = dirToHead.Magnitude
                 local unitToHead = dirToHead.Unit
 
-                local shouldTrack = main.wallpen
-                if not main.wallpen then
-                    local visible = isVisible(origin, headPos, closestChar)
-                    if visible then
-                        shouldTrack = true
+                -- Check if the bullet direction is roughly towards the target (optional, for accuracy)
+                local bulletDir = direction.Unit
+                local dot = bulletDir:Dot(unitToHead)
+                if dot > 0.9 then  -- Adjust threshold if needed
+                    local shouldTrack = main.wallpen
+                    if not main.wallpen then
+                        local visible = isVisible(origin, headPos, closestChar)
+                        if visible then
+                            shouldTrack = true
+                        end
                     end
-                end
 
-                if shouldTrack then
-                    return {
-                        Instance = closestHead,
-                        Position = headPos,
-                        Normal = -unitToHead,
-                        Material = closestHead.Material,
-                        Distance = distToHead
-                    }
+                    if shouldTrack then
+                        return {
+                            Instance = closestHead,
+                            Position = headPos,
+                            Normal = -unitToHead,
+                            Material = closestHead.Material,
+                            Distance = distToHead
+                        }
+                    end
                 end
             end
         end
@@ -114,12 +117,16 @@ tracerLine.Visible = false
 
 RunService.RenderStepped:Connect(function()
     if main.enable and main.line then
-        local closestHead = getClosestHead()
+        local closestHead, closestChar = getClosestHead()
         if closestHead then
-            local screenPos = Camera:WorldToViewportPoint(closestHead.Position)
-            tracerLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-            tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
-            tracerLine.Visible = true
+            if main.wallpen or isVisible(Camera.CFrame.Position, closestHead.Position, closestChar) then
+                local screenPos = Camera:WorldToViewportPoint(closestHead.Position)
+                tracerLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
+                tracerLine.Visible = true
+            else
+                tracerLine.Visible = false
+            end
         else
             tracerLine.Visible = false
         end
