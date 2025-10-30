@@ -54,7 +54,7 @@ local function getClosestHead()
     return closestHead
 end
 
--- Hook Raycast 进行子弹追踪
+-- Hook Raycast
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
@@ -76,7 +76,8 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         Distance = (closestHead.Position - origin).Magnitude
                     }
                 else
-                    -- 关闭穿墙：不返回伪造 Raycast，保持原始逻辑
+                    -- 不穿墙：返回头部（仅用于客户端追踪/视觉），不影响服务器命中
+                    -- 这里不调用 old() 修改射线，只用于绘制/追踪
                     return old(self, ...)
                 end
             end
