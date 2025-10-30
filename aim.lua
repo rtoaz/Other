@@ -1,12 +1,15 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false
+    friendcheck = false,
+    bulletPenetration = false, -- 子弹穿墙开关（false = 不穿墙，true = 强制命中头部）
+    drawLine = false, -- 目标连线开关（默认关闭）
 }
 
 -- 获取视角中心优先的最近玩家头部
@@ -58,17 +61,49 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 
     if method == "Raycast" and not checkcaller() then
         local origin = args[1] or Camera.CFrame.Position
+        local direction = args[2] or (Camera.CFrame.LookVector * 1000)
 
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
+                -- 如果开启了穿墙（强制命中），直接返回目标头部的信息
+                if main.bulletPenetration then
+                    return {
+                        Instance = closestHead,
+                        Position = closestHead.Position,
+                        Normal = (origin - closestHead.Position).Unit,
+                        Material = Enum.Material.Plastic,
+                        Distance = (closestHead.Position - origin).Magnitude
+                    }
+                else
+                    -- 否则先让原始 Raycast 运行一次，检查第一个被击中的实例是否为目标或其子物体
+                    local realResult = old(self, unpack(args))
+                    if realResult then
+                        local hitInst = realResult.Instance
+                        -- 如果真实击中的是目标（头或人体），我们就把结果定向到头部（提高命中稳定性）
+                        if hitInst and (hitInst == closestHead or hitInst:IsDescendantOf(closestHead.Parent)) then
+                            return {
+                                Instance = closestHead,
+                                Position = closestHead.Position,
+                                Normal = (origin - closestHead.Position).Unit,
+                                Material = Enum.Material.Plastic,
+                                Distance = (closestHead.Position - origin).Magnitude
+                            }
+                        else
+                            -- 否则保留真实击中结果（例如墙体）
+                            return realResult
+                        end
+                    else
+                        -- 如果 realResult 为 nil（极少数情况），按安全策略使用原始数据覆盖为头部
+                        return {
+                            Instance = closestHead,
+                            Position = closestHead.Position,
+                            Normal = (origin - closestHead.Position).Unit,
+                            Material = Enum.Material.Plastic,
+                            Distance = (closestHead.Position - origin).Magnitude
+                        }
+                    end
+                end
             end
         end
     end
@@ -141,3 +176,69 @@ Main:Toggle({
         main.friendcheck = state
     end
 })
+
+-- 新增：子弹穿墙开关（默认 false）
+Main:Toggle({
+    Title = "开启子弹穿墙",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.bulletPenetration = state
+    end
+})
+
+-- 新增：目标连线开关（默认 false）
+Main:Toggle({
+    Title = "开启目标连线",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.drawLine = state
+    end
+})
+
+-- 目标连线（使用 Drawing，如果可用则显示从摄像机中心到目标头部的线）
+local drawingEnabled, Drawing = pcall(function() return Drawing end)
+local targetLine
+if drawingEnabled and Drawing then
+    local success, ok = pcall(function()
+        targetLine = Drawing.new("Line")
+        targetLine.Visible = false
+        targetLine.Transparency = 1
+        targetLine.Thickness = 2
+        targetLine.From = Vector2.new(0,0)
+        targetLine.To = Vector2.new(0,0)
+        targetLine.Color = Color3.fromRGB(255, 0, 0)
+    end)
+    if not success then
+        targetLine = nil
+    end
+end
+
+-- 更新连线的渲染逻辑
+RunService.RenderStepped:Connect(function()
+    if not Camera then return end
+    if not LocalPlayer.Character then
+        if targetLine then targetLine.Visible = false end
+        return
+    end
+
+    if main.enable and main.drawLine and targetLine then
+        local closestHead = getClosestHead()
+        if closestHead and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local fromPos = Camera:WorldToViewportPoint(LocalPlayer.Character.HumanoidRootPart.Position)
+            local toPos, onScreen = Camera:WorldToViewportPoint(closestHead.Position)
+            if onScreen then
+                targetLine.From = Vector2.new(fromPos.X, fromPos.Y)
+                targetLine.To = Vector2.new(toPos.X, toPos.Y)
+                targetLine.Visible = true
+            else
+                targetLine.Visible = false
+            end
+        else
+            targetLine.Visible = false
+        end
+    else
+        if targetLine then targetLine.Visible = false end
+    end
+end)
