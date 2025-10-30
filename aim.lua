@@ -1,13 +1,28 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false
+    friendcheck = false,
+    drawLine = false, -- 目标连线，默认关闭
+    lineColor = Color3.fromRGB(255,255,255) -- 默认白色
 }
+
+-- 尝试创建 Drawing 线条（如果环境支持）
+local DrawLineObject
+pcall(function()
+    DrawLineObject = Drawing and Drawing.new and Drawing.new("Line")
+    if DrawLineObject then
+        DrawLineObject.Visible = false
+        DrawLineObject.Thickness = 2
+        DrawLineObject.Transparency = 1
+        DrawLineObject.Color = main.lineColor
+    end
+end)
 
 local function getClosestHead()
     local closestHead
@@ -93,6 +108,44 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     return old(self, ...)
 end))
 
+-- RenderStepped 用于实时更新连线（若可用）
+RunService.RenderStepped:Connect(function()
+    if DrawLineObject then
+        -- 默认不可见
+        DrawLineObject.Visible = false
+
+        if main.drawLine and main.enable then
+            local head = getClosestHead()
+            if head and head.Parent then
+                local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
+                local viewportSize = Camera.ViewportSize
+                local screen2D = Vector2.new(screenPoint.X, screenPoint.Y)
+                local inViewport = false
+
+                if onScreen ~= nil then
+                    inViewport = onScreen
+                else
+                    inViewport = (screenPoint.Z > 0)
+                end
+
+                if inViewport and screen2D.X >= 0 and screen2D.X <= viewportSize.X and screen2D.Y >= 0 and screen2D.Y <= viewportSize.Y then
+                    local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+                    DrawLineObject.Color = main.lineColor
+                    DrawLineObject.From = screenCenter
+                    DrawLineObject.To = screen2D
+                    DrawLineObject.Visible = true
+                else
+                    DrawLineObject.Visible = false
+                end
+            else
+                DrawLineObject.Visible = false
+            end
+        else
+            DrawLineObject.Visible = false
+        end
+    end
+end)
+
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -156,5 +209,15 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.friendcheck = state
+    end
+})
+
+-- 目标连线开关（默认关闭）
+Main:Toggle({
+    Title = "目标连线",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.drawLine = state
     end
 })
