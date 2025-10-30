@@ -12,18 +12,6 @@ local main = {
     line = false
 }
 
-local function IsVisible(head)
-    if not head or not head.Parent then return false end
-    local rayOrigin = Camera.CFrame.Position
-    local rayDirection = (head.Position - rayOrigin).Unit * 5000
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendants = {LocalPlayer.Character, Camera}
-    params.IgnoreWater = true
-    local result = Workspace:Raycast(rayOrigin, rayDirection, params)
-    return not result or result.Instance:IsDescendantOf(head.Parent)
-end
-
 local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
@@ -52,14 +40,10 @@ local function getClosestHead()
                 if root and head and humanoid and humanoid.Health > 0 then
                     local viewportPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
                     if onScreen then
-                        if not main.wallpen and not IsVisible(head) then
-                            -- skip if wall check enabled and not visible
-                        else
-                            local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                            if distance < closestDistance then
-                                closestHead = head
-                                closestDistance = distance
-                            end
+                        local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+                        if distance < closestDistance then
+                            closestHead = head
+                            closestDistance = distance
                         end
                     end
                 end
@@ -79,13 +63,29 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
+                local direction = (closestHead.Position - origin).Unit
+                local distance = (closestHead.Position - origin).Magnitude
+                local shouldOverride = main.wallpen
+
+                if not main.wallpen then
+                    local params = RaycastParams.new()
+                    params.FilterType = Enum.RaycastFilterType.Exclude
+                    params.FilterDescendants = {LocalPlayer.Character, closestHead.Parent}
+                    local realResult = Workspace:Raycast(origin, direction * distance, params)
+                    if not realResult then
+                        shouldOverride = true
+                    end
+                end
+
+                if shouldOverride then
+                    return {
+                        Instance = closestHead,
+                        Position = closestHead.Position,
+                        Normal = direction * -1,
+                        Material = Enum.Material.Plastic,
+                        Distance = distance
+                    }
+                end
             end
         end
     end
@@ -102,7 +102,7 @@ RunService.RenderStepped:Connect(function()
     if main.enable and main.line then
         local closestHead = getClosestHead()
         if closestHead then
-            local screenPos = Camera:WorldToViewportPoint(closestHead.Position)
+            local screenPos, _ = Camera:WorldToViewportPoint(closestHead.Position)
             tracerLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
             tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
             tracerLine.Visible = true
