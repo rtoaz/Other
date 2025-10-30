@@ -7,7 +7,7 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    throughWalls = false, -- 子弹穿墙，默认关闭（保留但在视角内目标时不影响选择）
+    throughWalls = false, -- 子弹穿墙，默认关闭
     hitChance = 100 -- 命中率（百分比），默认100
 }
 
@@ -16,6 +16,7 @@ math.randomseed(tick())
 
 -- 缓存目标以减少频繁计算（避免卡顿）
 local cachedTarget = nil
+local cachedTargetUnobstructed = false -- 缓存目标是否在上次检测时未被遮挡
 local cacheInterval = 0.08 -- 每 0.08s 更新一次目标（约 12.5Hz），可根据需要调低频率以降低卡顿
 local cacheAccum = 0
 
@@ -25,12 +26,7 @@ rayParams.FilterType = Enum.RaycastFilterType.Blacklist
 rayParams.FilterDescendantsInstances = {}
 rayParams.IgnoreWater = true
 
--- 返回：只在“视角内”的玩家头部，并按屏幕中心优先（越靠近屏幕中心优先）
--- 改动说明：
---  - 现在我们要求 WorldToViewportPoint 的 onScreen 为 true（即目标在屏幕视野范围内），
---    即便目标被遮挡（不可见）也会被候选（满足“视角内不可见也锁定”的要求）。
---  - 如果目标在摄像机视野外（onScreen 为 false），则不会被锁定（满足“视角外不锁定”）。
---  - 保留 main.throughWalls 字段以兼容之前的 UI，但当目标在视角内时我们**不再**基于可见性（raycast）来排除目标。
+-- 自己猜这里是什么
 local function getClosestHead(origin)
     local closestHead
     local closestScreenDist = math.huge
@@ -70,9 +66,8 @@ local function getClosestHead(origin)
 
                 if head and humanoid and humanoid.Health > 0 then
                     local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
-                    -- 要求 onScreen 为 true：仅锁定那些处于屏幕视野内的目标（即使被遮挡仍视为有效）
+                    -- 要求 onScreen 为 true：仅锁定那些处于屏幕视野内的目标（即使被遮挡仍视为候选）
                     if onScreen and screenPoint.Z > 0 then
-                        -- 不再基于射线可见性排除目标：视角内不可见的玩家也会被锁定
                         local screen2 = Vector2.new(screenPoint.X, screenPoint.Y)
                         local screenDist = (screen2 - screenCenter).Magnitude
 
@@ -98,41 +93,68 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
 
         if main.enable and cachedTarget then
-            -- 命中率判断：生成 1-100 的随机数，当随机值 <= hitChance 时命中（返回目标），否则按原始行为继续
-            local roll = math.random(1, 100)
-            if roll <= main.hitChance then
-                return {
-                    Instance = cachedTarget,
-                    Position = cachedTarget.Position,
-                    Normal = (origin - cachedTarget.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (cachedTarget.Position - origin).Magnitude
-                }
+            -- 在返回缓存目标前，检查穿墙设置与缓存的可见性结果：
+            -- 只有当 main.throughWalls == true 或 cachedTargetUnobstructed == true 才会返回目标，
+            -- 否则将继续执行原始射线（避免穿墙）。
+            if main.throughWalls or cachedTargetUnobstructed then
+                local roll = math.random(1, 100)
+                if roll <= main.hitChance then
+                    return {
+                        Instance = cachedTarget,
+                        Position = cachedTarget.Position,
+                        Normal = (origin - cachedTarget.Position).Unit,
+                        Material = Enum.Material.Plastic,
+                        Distance = (cachedTarget.Position - origin).Magnitude
+                    }
+                end
             end
-            -- 未命中则继续走原始射线（返回老方法）
+            -- 若不满足穿墙或可见性条件，落回原始行为（即不强制命中）
         end
     end
     return old(self, ...)
 end))
 
--- 周期性更新 cachedTarget，减少每次射线调用时的计算量
+-- 周期性更新 cachedTarget 与 cachedTargetUnobstructed，减少每次射线调用时的计算量
 local RunService = game:GetService("RunService")
 RunService.Heartbeat:Connect(function(dt)
     cacheAccum = cacheAccum + dt
     if cacheAccum >= cacheInterval then
         cacheAccum = 0
         if main.enable then
-            -- 使用摄像机位置作为 origin 进行目标筛选（仍会用 WorldToViewportPoint 判断是否在视野内）
-            local ok, target = pcall(function()
-                return getClosestHead(Camera and Camera.CFrame.Position or nil)
+            local ok, target, unob = pcall(function()
+                -- 选取视角内最优目标（不考虑遮挡）
+                local head = getClosestHead(Camera and Camera.CFrame.Position or nil)
+                if not head then
+                    return nil, nil
+                end
+
+                -- 检查当前帧该目标是否未被遮挡（射线检测）
+                local direction = head.Position - (Camera and Camera.CFrame.Position or workspace.CurrentCamera.CFrame.Position)
+                local ray = Workspace:Raycast((Camera and Camera.CFrame.Position or workspace.CurrentCamera.CFrame.Position), direction, rayParams)
+                local unobstructed = false
+                if ray then
+                    if ray.Instance and ray.Instance:IsDescendantOf(head.Parent) then
+                        unobstructed = true
+                    else
+                        unobstructed = false
+                    end
+                else
+                    unobstructed = true
+                end
+
+                return head, unobstructed
             end)
+
             if ok then
                 cachedTarget = target
+                cachedTargetUnobstructed = unob or false
             else
                 cachedTarget = nil
+                cachedTargetUnobstructed = false
             end
         else
             cachedTarget = nil
+            cachedTargetUnobstructed = false
         end
     end
 end)
@@ -182,7 +204,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
-        if not state then cachedTarget = nil end
+        if not state then cachedTarget = nil cachedTargetUnobstructed = false end
     end
 })
 
@@ -205,7 +227,7 @@ Main:Toggle({
 })
 
 Main:Toggle({
-    Title = "子弹穿墙",
+    Title = "子弹穿墙（允许穿墙）",
     Image = "bird",
     Value = false,
     Callback = function(state)
