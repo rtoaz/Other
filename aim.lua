@@ -12,12 +12,16 @@ local main = {
     line = false
 }
 
+local currentTargetHead = nil
+local currentTargetChar = nil
+local targetUpdateConnection
+
 local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
     local closestChar
 
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil end
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil, nil end
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -54,16 +58,15 @@ local function getClosestHead()
     return closestHead, closestChar
 end
 
-local function isVisible(origin, targetPos, targetChar)
-    local direction = (targetPos - origin)
-    local distance = direction.Magnitude
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {LocalPlayer.Character, targetChar}
-    local rayDir = direction.Unit * distance
-    local result = Workspace:Raycast(origin, rayDir, params)
-    return not result
-end
+-- Update target every frame only if enabled, but to reduce lag, use Heartbeat for update
+if targetUpdateConnection then targetUpdateConnection:Disconnect() end
+targetUpdateConnection = RunService.Heartbeat:Connect(function()
+    if main.enable then
+        currentTargetHead, currentTargetChar = getClosestHead()
+    else
+        currentTargetHead, currentTargetChar = nil, nil
+    end
+end)
 
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -72,36 +75,65 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     if method == "Raycast" and not checkcaller() then
         local origin = args[1]
         local direction = args[2]
+        local params = args[3] or RaycastParams.new()
 
-        if main.enable then
-            local closestHead, closestChar = getClosestHead()
-            if closestHead then
-                local headPos = closestHead.Position
-                local dirToHead = (headPos - origin)
-                local distToHead = dirToHead.Magnitude
-                local unitToHead = dirToHead.Unit
+        if main.enable and currentTargetHead and currentTargetChar then
+            local targetPos = currentTargetHead.Position
+            local dirToTarget = (targetPos - origin).Unit
+            local bulletDir = direction.Unit * direction.Magnitude -- Keep magnitude for distance
+            local dot = bulletDir.Unit:Dot(dirToTarget)
 
-                -- Check if the bullet direction is roughly towards the target (optional, for accuracy)
-                local bulletDir = direction.Unit
-                local dot = bulletDir:Dot(unitToHead)
-                if dot > 0.9 then  -- Adjust threshold if needed
-                    local shouldTrack = main.wallpen
-                    if not main.wallpen then
-                        local visible = isVisible(origin, headPos, closestChar)
-                        if visible then
-                            shouldTrack = true
-                        end
-                    end
+            if dot > 0.7 then  -- Threshold for "aimed at target"
+                local rayDir = dirToTarget * (targetPos - origin).Magnitude
+                local customParams = RaycastParams.new()
+                customParams.FilterType = params.FilterType
+                if params.FilterDescendantsInstances then
+                    customParams.FilterDescendantsInstances = params.FilterDescendantsInstances
+                else
+                    customParams.FilterDescendantsInstances = {LocalPlayer.Character}
+                end
 
-                    if shouldTrack then
+                local result = Workspace:Raycast(origin, rayDir, customParams)
+
+                if main.wallpen then
+                    -- Always hit head
+                    return {
+                        Instance = currentTargetHead,
+                        Position = targetPos,
+                        Normal = -dirToTarget,
+                        Material = currentTargetHead.Material,
+                        Distance = (targetPos - origin).Magnitude
+                    }
+                elseif result then
+                    -- Check if hit is on target
+                    if result.Instance:IsDescendantOf(currentTargetChar) then
+                        -- Hit target, force head
                         return {
-                            Instance = closestHead,
-                            Position = headPos,
-                            Normal = -unitToHead,
-                            Material = closestHead.Material,
-                            Distance = distToHead
+                            Instance = currentTargetHead,
+                            Position = targetPos,
+                            Normal = -dirToTarget,
+                            Material = currentTargetHead.Material,
+                            Distance = (targetPos - origin).Magnitude
+                        }
+                    else
+                        -- Hit wall, return wall hit (in front of head)
+                        return {
+                            Instance = result.Instance,
+                            Position = result.Position,
+                            Normal = result.Normal,
+                            Material = result.Material,
+                            Distance = result.Distance
                         }
                     end
+                else
+                    -- No hit, clear to target, force head
+                    return {
+                        Instance = currentTargetHead,
+                        Position = targetPos,
+                        Normal = -dirToTarget,
+                        Material = currentTargetHead.Material,
+                        Distance = (targetPos - origin).Magnitude
+                    }
                 end
             end
         end
@@ -116,20 +148,11 @@ tracerLine.Transparency = 1
 tracerLine.Visible = false
 
 RunService.RenderStepped:Connect(function()
-    if main.enable and main.line then
-        local closestHead, closestChar = getClosestHead()
-        if closestHead then
-            if main.wallpen or isVisible(Camera.CFrame.Position, closestHead.Position, closestChar) then
-                local screenPos = Camera:WorldToViewportPoint(closestHead.Position)
-                tracerLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-                tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
-                tracerLine.Visible = true
-            else
-                tracerLine.Visible = false
-            end
-        else
-            tracerLine.Visible = false
-        end
+    if main.enable and main.line and currentTargetHead then
+        local screenPos = Camera:WorldToViewportPoint(currentTargetHead.Position)
+        tracerLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
+        tracerLine.Visible = true
     else
         tracerLine.Visible = false
     end
