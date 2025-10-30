@@ -76,12 +76,26 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         Distance = (closestHead.Position - origin).Magnitude
                     }
                 else
-                    -- 否则先让原始 Raycast 运行一次，检查第一个被击中的实例是否为目标或其子物体
-                    local realResult = old(self, unpack(args))
-                    if realResult then
-                        local hitInst = realResult.Instance
-                        -- 如果真实击中的是目标（头或人体），我们就把结果定向到头部（提高命中稳定性）
-                        if hitInst and (hitInst == closestHead or hitInst:IsDescendantOf(closestHead.Parent)) then
+                    -- 否则使用原始 metamethod 对 Workspace 做一次明确的 LOS（Raycast）检测
+                    -- 这样可以避免部分游戏/调用路径导致直接使用 realResult 判断失效的情况
+                    local rayParams = RaycastParams.new()
+                    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+                    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+                    rayParams.IgnoreWater = true
+
+                    local dirToHead = (closestHead.Position - origin)
+                    -- 使用 old 直接以 Workspace 作为 self 调用原始 metamethod，避免再次触发 hook
+                    local losResult = nil
+                    local success, res = pcall(function()
+                        return old(Workspace, origin, dirToHead, rayParams)
+                    end)
+                    if success then losResult = res end
+
+                    -- 如果 LOS 检测命中了东西
+                    if losResult and losResult.Instance then
+                        local hitInst = losResult.Instance
+                        if hitInst == closestHead or hitInst:IsDescendantOf(closestHead.Parent) then
+                            -- 可以直射命中头部 -> 指向头部
                             return {
                                 Instance = closestHead,
                                 Position = closestHead.Position,
@@ -90,11 +104,17 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                                 Distance = (closestHead.Position - origin).Magnitude
                             }
                         else
-                            -- 否则保留真实击中结果（例如墙体）
-                            return realResult
+                            -- 被遮挡（墙体等）-> 返回真实 LOS 结果（例如墙体）
+                            return losResult
                         end
                     else
-                        -- 如果 realResult 为 nil（极少数情况），按安全策略使用原始数据覆盖为头部
+                        -- LOS 检测没命中（极少或异常情况）：为了兼容性，退回到调用处的原始 Raycast 结果
+                        -- 这里用 pcall 调用原始 metamethod 以避免意外崩溃
+                        local ok, originalResult = pcall(function() return old(self, unpack(args)) end)
+                        if ok and originalResult then
+                            return originalResult
+                        end
+                        -- 如果都没有可用结果，则作为最后手段指向头部
                         return {
                             Instance = closestHead,
                             Position = closestHead.Position,
@@ -197,7 +217,7 @@ Main:Toggle({
     end
 })
 
--- 目标连线（使用 Drawing，如果可用则显示从摄像机中心到目标头部的线）
+-- 目标连线（使用 Drawing，如果可用则显示从屏幕中心到目标头部的线）
 local drawingEnabled, Drawing = pcall(function() return Drawing end)
 local targetLine
 if drawingEnabled and Drawing then
@@ -208,7 +228,7 @@ if drawingEnabled and Drawing then
         targetLine.Thickness = 2
         targetLine.From = Vector2.new(0,0)
         targetLine.To = Vector2.new(0,0)
-        targetLine.Color = Color3.fromRGB(255, 0, 0)
+        targetLine.Color = Color3.fromRGB(255, 255, 255) -- 默认白色
     end)
     if not success then
         targetLine = nil
@@ -225,11 +245,11 @@ RunService.RenderStepped:Connect(function()
 
     if main.enable and main.drawLine and targetLine then
         local closestHead = getClosestHead()
-        if closestHead and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-            local fromPos = Camera:WorldToViewportPoint(LocalPlayer.Character.HumanoidRootPart.Position)
+        if closestHead then
+            local screenCenter = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
             local toPos, onScreen = Camera:WorldToViewportPoint(closestHead.Position)
             if onScreen then
-                targetLine.From = Vector2.new(fromPos.X, fromPos.Y)
+                targetLine.From = screenCenter -- 从屏幕中间开始
                 targetLine.To = Vector2.new(toPos.X, toPos.Y)
                 targetLine.Visible = true
             else
