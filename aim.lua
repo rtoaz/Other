@@ -92,7 +92,7 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                     if losResult and losResult.Instance then
                         local hitInst = losResult.Instance
                         if hitInst == closestHead or hitInst:IsDescendantOf(closestHead.Parent) then
-                            -- 可直射命中头部
+                            -- 可直射命中头部 -> 指向头部
                             return {
                                 Instance = closestHead,
                                 Position = closestHead.Position,
@@ -101,12 +101,12 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                                 Distance = (closestHead.Position - origin).Magnitude
                             }
                         else
-                            -- 被墙挡住 -> 保持原射线命中结果
+                            -- 被墙挡住 -> 保持原射线命中结果（不会伪穿墙）
                             return losResult
                         end
                     else
-                        -- LOS 没命中 -> 不覆盖，返回 nil
-                        return nil
+                        -- LOS 没命中 -> 不覆盖任何东西
+                        return old(self, unpack(args))
                     end
                 end
             end
