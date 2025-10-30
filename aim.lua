@@ -10,13 +10,24 @@ local main = {
     throughWalls = false -- 子弹穿墙，默认关闭
 }
 
+-- 缓存目标以减少频繁计算（避免卡顿）
+local cachedTarget = nil
+local cacheInterval = 0.08 -- 每 0.08s 更新一次目标（约 12.5Hz），可根据需要调低频率以降低卡顿
+local cacheAccum = 0
+
+-- 复用 RaycastParams 避免频繁创建
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+rayParams.FilterDescendantsInstances = {}
+rayParams.IgnoreWater = true
+
 -- 返回：只在视角内的玩家头部，并按屏幕中心优先（越靠近屏幕中心优先）
 -- 参数 origin: 可选，射线起点（用于可见性检测）。
 local function getClosestHead(origin)
     local closestHead
     local closestScreenDist = math.huge
 
-    if not LocalPlayer.Character then return end
+    if not LocalPlayer or not LocalPlayer.Character then return end
     if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
 
     if not Camera or not Camera:IsA("Camera") then
@@ -29,11 +40,8 @@ local function getClosestHead(origin)
     local viewportSize = Camera.ViewportSize
     local screenCenter = Vector2.new(viewportSize.X/2, viewportSize.Y/2)
 
-    -- 复用 RaycastParams 减少频繁创建
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    -- 更新过滤黑名单（包含本地角色以外的忽略项）
     rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-    rayParams.IgnoreWater = true
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -49,27 +57,25 @@ local function getClosestHead(origin)
 
             if not skip then
                 local character = player.Character
-                local root = character:FindFirstChild("HumanoidRootPart")
                 local head = character:FindFirstChild("Head")
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-                if root and head and humanoid and humanoid.Health > 0 then
+                if head and humanoid and humanoid.Health > 0 then
                     local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
                     if onScreen and screenPoint.Z > 0 then
-                        -- 可见性检测：当 throughWalls == false 时需要检测是否被遮挡
                         local unobstructed = true
+
+                        -- 只有在 throughWalls 关闭时做可见性检测
                         if not main.throughWalls then
                             local direction = head.Position - origin
                             local ray = Workspace:Raycast(origin, direction, rayParams)
                             if ray then
-                                -- 如果射线命中的是目标角色的某个部件，则认为未被遮挡
                                 if ray.Instance and ray.Instance:IsDescendantOf(character) then
                                     unobstructed = true
                                 else
                                     unobstructed = false
                                 end
                             else
-                                -- 未命中任何物体，视为未被遮挡
                                 unobstructed = true
                             end
                         end
@@ -92,6 +98,7 @@ local function getClosestHead(origin)
     return closestHead
 end
 
+-- Hook 中尽量使用缓存的目标以减少每次被调用时的开销
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
@@ -99,21 +106,41 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     if method == "Raycast" and not checkcaller() then
         local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
 
-        if main.enable then
-            local closestHead = getClosestHead(origin)
-            if closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
-            end
+        if main.enable and cachedTarget then
+            -- 直接返回缓存目标，避免在这里进行昂贵计算
+            return {
+                Instance = cachedTarget,
+                Position = cachedTarget.Position,
+                Normal = (origin - cachedTarget.Position).Unit,
+                Material = Enum.Material.Plastic,
+                Distance = (cachedTarget.Position - origin).Magnitude
+            }
         end
     end
     return old(self, ...)
 end))
+
+-- 周期性更新 cachedTarget，减少每次射线调用时的计算量
+local RunService = game:GetService("RunService")
+RunService.Heartbeat:Connect(function(dt)
+    cacheAccum = cacheAccum + dt
+    if cacheAccum >= cacheInterval then
+        cacheAccum = 0
+        if main.enable then
+            -- 使用摄像机位置作为 origin 进行可见性检测
+            local ok, target = pcall(function()
+                return getClosestHead(Camera and Camera.CFrame.Position or nil)
+            end)
+            if ok then
+                cachedTarget = target
+            else
+                cachedTarget = nil
+            end
+        else
+            cachedTarget = nil
+        end
+    end
+end)
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
@@ -123,7 +150,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 270),
+    Size = UDim2.fromOffset(300, 350),
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -160,6 +187,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
+        if not state then cachedTarget = nil end
     end
 })
 
@@ -182,8 +210,8 @@ Main:Toggle({
 })
 
 Main:Toggle({
-    Title = "子弹穿墙",
-    Image = "bird",
+    Title = "子弹穿墙（允许穿墙）",
+    Image = "shield",
     Value = false,
     Callback = function(state)
         main.throughWalls = state
@@ -191,7 +219,6 @@ Main:Toggle({
 })
 
 -- ===== 增加：目标连线（默认白色） =====
-local RunService = game:GetService("RunService")
 local DrawingAvailable, drawNew = pcall(function() return Drawing.new end)
 local LineCreationOk = false
 local targetLine
@@ -219,7 +246,7 @@ RunService.RenderStepped:Connect(function()
     end
 
     if main.enable and main.drawLine and LineCreationOk then
-        local closest = getClosestHead(Camera.CFrame.Position)
+        local closest = cachedTarget
         if closest and closest.Parent then
             local screenPoint, onScreen = Camera:WorldToViewportPoint(closest.Position)
             if onScreen and screenPoint.Z > 0 then
@@ -243,7 +270,7 @@ end)
 -- UI: 增加连线开关
 Main:Toggle({
     Title = "显示目标连线",
-    Image = "bird",
+    Image = "eye",
     Value = false,
     Callback = function(state)
         main.drawLine = state
