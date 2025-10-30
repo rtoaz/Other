@@ -9,7 +9,9 @@ local main = {
     teamcheck = false,
     friendcheck = false,
     drawLine = false, -- 目标连线，默认关闭
-    lineColor = Color3.fromRGB(255,255,255) -- 默认白色
+    lineColor = Color3.fromRGB(255,255,255), -- 默认白色
+    bulletPenetration = false, -- 子弹穿墙，默认关闭
+    rayMode = "Raycast" -- 模式选择，默认 Raycast
 }
 
 -- 尝试创建 Drawing 线条（如果环境支持）
@@ -24,13 +26,20 @@ pcall(function()
     end
 end)
 
+local function firstHitBetween(origin, targetPos)
+    local direction = targetPos - origin
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = { (LocalPlayer.Character or Workspace) }
+    return Workspace:Raycast(origin, direction, params)
+end
+
 local function getClosestHead()
     local closestHead
     local closestScreenDistance = math.huge
     local closestWorldDistance = math.huge
 
-    if not LocalPlayer.Character then return end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
 
     local viewportSize = Camera.ViewportSize
     local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
@@ -39,14 +48,8 @@ local function getClosestHead()
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local skip = false
-
-            if main.teamcheck and player.Team == LocalPlayer.Team then
-                skip = true
-            end
-
-            if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then
-                skip = true
-            end
+            if main.teamcheck and player.Team == LocalPlayer.Team then skip = true end
+            if not skip and main.friendcheck and LocalPlayer:IsFriendsWith(player.UserId) then skip = true end
 
             if not skip then
                 local character = player.Character
@@ -55,23 +58,13 @@ local function getClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    -- 尝试使用 WorldToViewportPoint（有些环境会返回两个值）
                     local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
                     local screen2D = Vector2.new(screenPoint.X, screenPoint.Y)
-                    local inViewport = false
+                    local inViewport = onScreen ~= nil and onScreen or (screenPoint.Z > 0)
 
-                    if onScreen ~= nil then
-                        inViewport = onScreen
-                    else
-                        inViewport = (screenPoint.Z > 0)
-                    end
-
-                    -- 确保在屏幕范围内（0..ViewportSize）
                     if inViewport and screen2D.X >= 0 and screen2D.X <= viewportSize.X and screen2D.Y >= 0 and screen2D.Y <= viewportSize.Y then
                         local screenDistance = (screen2D - screenCenter).Magnitude
                         local worldDistance = (root.Position - localRootPos).Magnitude
-
-                        -- 优先视野中更靠中心的目标；若相等（或非常接近），使用世界距离作次要判断
                         if screenDistance < closestScreenDistance or (math.abs(screenDistance - closestScreenDistance) < 1e-4 and worldDistance < closestWorldDistance) then
                             closestHead = head
                             closestScreenDistance = screenDistance
@@ -85,63 +78,117 @@ local function getClosestHead()
     return closestHead
 end
 
+-- 根据模式返回允许拦截的方法集合（单选模式）
+local function getAllowedMethodsForMode(mode)
+    if mode == "Raycast" then
+        return { ["Raycast"] = true }
+    elseif mode == "FindPartOnRay" then
+        return {
+            ["FindPartOnRay"] = true
+        }
+    elseif mode == "FindPartOnRayWithIgnoreList" then
+        return {
+            ["FindPartOnRayWithIgnoreList"] = true
+        }
+    elseif mode == "FindPartOnRayWithWhitelist" then
+        return {
+            ["FindPartOnRayWithWhitelist"] = true
+        }
+    else
+        return {}
+    end
+end
+
+local allowedMethods = getAllowedMethodsForMode(main.rayMode)
+
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and not checkcaller() then
-        local origin = args[1] or Camera.CFrame.Position
+    if not checkcaller() and main.enable and allowedMethods[method] then
+        local targetHead = getClosestHead()
+        if not targetHead then return old(self, ...) end
 
-        if main.enable then
-            local closestHead = getClosestHead()
-            if closestHead then
+        local origin
+        local headPos = targetHead.Position
+        if typeof(args[1]) == "Vector3" then
+            origin = args[1]
+        elseif typeof(args[1]) == "Ray" then
+            origin = args[1].Origin
+        else
+            origin = Camera and Camera.CFrame.Position or Workspace.CurrentCamera.CFrame.Position
+        end
+
+        local vectorToHead = (headPos - origin)
+        local distToHead = vectorToHead.Magnitude
+        local rayResult = firstHitBetween(origin, headPos)
+
+        if main.bulletPenetration then
+            if method == "Raycast" then
                 return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
+                    Instance = targetHead,
+                    Position = headPos,
+                    Normal = (origin - headPos).Unit,
                     Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
+                    Distance = distToHead
                 }
+            else
+                return targetHead, headPos, (origin - headPos).Unit
+            end
+        else
+            if rayResult and rayResult.Instance then
+                if rayResult.Instance:IsDescendantOf(targetHead.Parent) then
+                    if method == "Raycast" then
+                        return {
+                            Instance = targetHead,
+                            Position = headPos,
+                            Normal = (origin - headPos).Unit,
+                            Material = Enum.Material.Plastic,
+                            Distance = distToHead
+                        }
+                    else
+                        return targetHead, headPos, (origin - headPos).Unit
+                    end
+                else
+                    return old(self, ...)
+                end
+            else
+                if method == "Raycast" then
+                    return {
+                        Instance = targetHead,
+                        Position = headPos,
+                        Normal = (origin - headPos).Unit,
+                        Material = Enum.Material.Plastic,
+                        Distance = distToHead
+                    }
+                else
+                    return targetHead, headPos, (origin - headPos).Unit
+                end
             end
         end
     end
+
     return old(self, ...)
 end))
 
--- RenderStepped 用于实时更新连线（若可用）
 RunService.RenderStepped:Connect(function()
     if DrawLineObject then
-        -- 默认不可见
         DrawLineObject.Visible = false
-
         if main.drawLine and main.enable then
             local head = getClosestHead()
             if head and head.Parent then
                 local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
                 local viewportSize = Camera.ViewportSize
                 local screen2D = Vector2.new(screenPoint.X, screenPoint.Y)
-                local inViewport = false
-
-                if onScreen ~= nil then
-                    inViewport = onScreen
-                else
-                    inViewport = (screenPoint.Z > 0)
-                end
-
+                local inViewport = onScreen ~= nil and onScreen or (screenPoint.Z > 0)
                 if inViewport and screen2D.X >= 0 and screen2D.X <= viewportSize.X and screen2D.Y >= 0 and screen2D.Y <= viewportSize.Y then
                     local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
                     DrawLineObject.Color = main.lineColor
                     DrawLineObject.From = screenCenter
                     DrawLineObject.To = screen2D
                     DrawLineObject.Visible = true
-                else
-                    DrawLineObject.Visible = false
                 end
-            else
-                DrawLineObject.Visible = false
             end
-        else
-            DrawLineObject.Visible = false
         end
     end
 end)
@@ -154,7 +201,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 270),
+    Size = UDim2.fromOffset(300, 340),
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -172,7 +219,7 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("FF0F7B"), 
+        Color3.fromHex("FF0F7B"),
         Color3.fromHex("F89B29")
     ),
     Draggable = true,
@@ -189,35 +236,46 @@ Main:Toggle({
     Title = "开启子弹追踪",
     Image = "bird",
     Value = false,
-    Callback = function(state)
-        main.enable = state
-    end
+    Callback = function(state) main.enable = state end
 })
 
 Main:Toggle({
     Title = "开启队伍验证",
     Image = "bird",
     Value = false,
-    Callback = function(state)
-        main.teamcheck = state
-    end
+    Callback = function(state) main.teamcheck = state end
 })
 
 Main:Toggle({
     Title = "开启好友验证",
     Image = "bird",
     Value = false,
-    Callback = function(state)
-        main.friendcheck = state
-    end
+    Callback = function(state) main.friendcheck = state end
 })
 
--- 目标连线开关（默认关闭）
 Main:Toggle({
     Title = "目标连线",
     Image = "bird",
     Value = false,
-    Callback = function(state)
-        main.drawLine = state
+    Callback = function(state) main.drawLine = state end
+})
+
+Main:Toggle({
+    Title = "子弹穿墙",
+    Image = "shield",
+    Value = false,
+    Callback = function(state) main.bulletPenetration = state end
+})
+
+-- 模式下拉（仅单选），选项拆分为单独模式
+Main:Dropdown({
+    Title = "模式",
+    Values = { "Raycast", "FindPartOnRay", "FindPartOnRayWithIgnoreList", "FindPartOnRayWithWhitelist" },
+    Value = "Raycast", -- 默认值
+    Multi = false,
+    Callback = function(Value)
+        print("选中:", Value)
+        main.rayMode = Value
+        allowedMethods = getAllowedMethodsForMode(Value)
     end
 })
