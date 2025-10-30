@@ -54,7 +54,7 @@ local function getClosestHead()
     return closestHead
 end
 
--- Hook Raycast 修改方向
+-- Hook Raycast 修改射线
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
@@ -76,7 +76,7 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         Distance = (closestHead.Position - origin).Magnitude
                     }
                 else
-                    -- 不穿墙：修改射线方向，但长度保持原射线长度
+                    -- 不穿墙：修改方向，但不强制命中
                     local originalMagnitude = direction.Magnitude
                     local newDirection = (closestHead.Position - origin).Unit * originalMagnitude
                     args[2] = newDirection
