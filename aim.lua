@@ -1,6 +1,5 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
@@ -8,18 +7,15 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    bulletPenetration = false, -- 子弹穿墙开关
-    drawLine = false, -- 目标连线开关
+    wallcheck = false  -- 新增：子弹穿墙开关
 }
 
--- 获取视角中心优先的最近玩家头部
 local function getClosestHead()
     local closestHead
     local closestScreenDistance = math.huge
 
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
-
-    local screenCenter = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    if not LocalPlayer.Character then return end
+    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -39,12 +35,21 @@ local function getClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if head and humanoid and humanoid.Health > 0 then
-                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    -- 将头部位置转换为屏幕坐标
+                    local headPosition = head.Position
+                    local screenPoint, onScreen = Camera:WorldToScreenPoint(headPosition)
+                    
+                    -- 只锁定视角内的玩家
                     if onScreen then
-                        local distanceToCenter = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
-                        if distanceToCenter < closestScreenDistance then
+                        -- 计算与屏幕中心的距离
+                        local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                        local screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
+                        local screenDistance = (screenPos - screenCenter).Magnitude
+                        
+                        -- 优先选择视角中间的玩家
+                        if screenDistance < closestScreenDistance then
                             closestHead = head
-                            closestScreenDistance = distanceToCenter
+                            closestScreenDistance = screenDistance
                         end
                     end
                 end
@@ -54,20 +59,54 @@ local function getClosestHead()
     return closestHead
 end
 
--- Hook Raycast 修改射线
+-- 检查玩家是否被墙壁遮挡
+local function isPlayerVisible(targetHead)
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        return false
+    end
+    
+    -- 从相机位置到目标头部发射一条射线
+    local origin = Camera.CFrame.Position
+    local direction = (targetHead.Position - origin).Unit
+    local distance = (targetHead.Position - origin).Magnitude
+    
+    -- 使用RaycastParams设置忽略玩家自身
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+    
+    local raycastResult = Workspace:Raycast(origin, direction * distance, raycastParams)
+    
+    -- 如果没有命中任何物体，或者命中的是目标玩家，则玩家可见
+    if not raycastResult then
+        return true
+    end
+    
+    -- 检查是否命中了目标玩家
+    local hitInstance = raycastResult.Instance
+    while hitInstance and hitInstance ~= Workspace do
+        if hitInstance:IsDescendantOf(targetHead.Parent) then
+            return true
+        end
+        hitInstance = hitInstance.Parent
+    end
+    
+    -- 命中了其他物体，玩家被遮挡
+    return false
+end
+
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
     if method == "Raycast" and not checkcaller() then
         local origin = args[1] or Camera.CFrame.Position
-        local direction = args[2] or (Camera.CFrame.LookVector * 1000)
 
         if main.enable then
             local closestHead = getClosestHead()
             if closestHead then
-                if main.bulletPenetration then
-                    -- 开启穿墙：强制命中头部
+                -- 如果开启穿墙，或者玩家没有被墙壁遮挡，则直接锁定玩家
+                if main.wallcheck or isPlayerVisible(closestHead) then
                     return {
                         Instance = closestHead,
                         Position = closestHead.Position,
@@ -76,11 +115,8 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         Distance = (closestHead.Position - origin).Magnitude
                     }
                 else
-                    -- 不穿墙：修改方向，但不强制命中
-                    local originalMagnitude = direction.Magnitude
-                    local newDirection = (closestHead.Position - origin).Unit * originalMagnitude
-                    args[2] = newDirection
-                    return old(self, table.unpack(args))
+                    -- 如果不开启穿墙且玩家被遮挡，则返回原始射线检测结果（会命中墙壁）
+                    return old(self, ...)
                 end
             end
         end
@@ -88,7 +124,6 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     return old(self, ...)
 end))
 
--- UI加载
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -138,6 +173,15 @@ Main:Toggle({
 })
 
 Main:Toggle({
+    Title = "开启子弹穿墙",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.wallcheck = state
+    end
+})
+
+Main:Toggle({
     Title = "开启队伍验证",
     Image = "bird",
     Value = false,
@@ -154,66 +198,3 @@ Main:Toggle({
         main.friendcheck = state
     end
 })
-
-Main:Toggle({
-    Title = "开启子弹穿墙",
-    Image = "bird",
-    Value = false,
-    Callback = function(state)
-        main.bulletPenetration = state
-    end
-})
-
-Main:Toggle({
-    Title = "开启目标连线",
-    Image = "bird",
-    Value = false,
-    Callback = function(state)
-        main.drawLine = state
-    end
-})
-
--- 目标连线（屏幕中心 -> 目标头部）
-local drawingEnabled, Drawing = pcall(function() return Drawing end)
-local targetLine
-if drawingEnabled and Drawing then
-    local success, ok = pcall(function()
-        targetLine = Drawing.new("Line")
-        targetLine.Visible = false
-        targetLine.Transparency = 1
-        targetLine.Thickness = 2
-        targetLine.From = Vector2.new(0,0)
-        targetLine.To = Vector2.new(0,0)
-        targetLine.Color = Color3.fromRGB(255, 255, 255) -- 默认白色
-    end)
-    if not success then
-        targetLine = nil
-    end
-end
-
-RunService.RenderStepped:Connect(function()
-    if not Camera then return end
-    if not LocalPlayer.Character then
-        if targetLine then targetLine.Visible = false end
-        return
-    end
-
-    if main.enable and main.drawLine and targetLine then
-        local closestHead = getClosestHead()
-        if closestHead then
-            local screenCenter = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-            local toPos, onScreen = Camera:WorldToViewportPoint(closestHead.Position)
-            if onScreen then
-                targetLine.From = screenCenter
-                targetLine.To = Vector2.new(toPos.X, toPos.Y)
-                targetLine.Visible = true
-            else
-                targetLine.Visible = false
-            end
-        else
-            targetLine.Visible = false
-        end
-    else
-        if targetLine then targetLine.Visible = false end
-    end
-end)
