@@ -84,40 +84,52 @@ local function getClosestHead(origin)
     return closestHead
 end
 
--- 替换：更加安全的 __namecall 钩子实现（避免返回 Lua table 导致 Aero 等架构停止渲染）
+-- 更兼容的 __namecall 钩子（保留原始 direction 长度，保证远近一致性）
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    -- 只处理 Raycast 且来自游戏（非脚本自身调用）
     if method == "Raycast" and not checkcaller() then
-        -- origin = args[1], direction = args[2] (Roblox: Workspace:Raycast(origin, direction, params))
+        -- origin = args[1], direction = args[2], params = args[3]（常见签名）
         local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
-        local direction = args[2]
+        local origDirection = args[2]
 
-        -- 只在开启子弹追踪并存在缓存目标时尝试修改参数
+        -- 仅在开启子弹追踪且有缓存目标时尝试修改参数
         if main.enable and cachedTarget then
-            -- 检查穿墙/可见性条件：若未允许穿墙且缓存标记为不可见，则不修改射线（避免穿墙）
-            if main.throughWalls or cachedTargetUnobstructed then
-                -- 命中率判定
-                local roll = math.random(1, 100)
-                if roll <= main.hitChance then
-                    -- 计算新的方向向量：从 origin 指向目标位置
-                    local newDirection = (cachedTarget.Position - origin)
+            -- 如果 cachedTarget.Position 无效则回退
+            local okPos = pcall(function() return cachedTarget.Position end)
+            if okPos and cachedTarget.Position then
+                -- 只有当允许穿墙或缓存时目标未被遮挡，才可能修改射线
+                if main.throughWalls or cachedTargetUnobstructed then
+                    -- 命中率判定
+                    local roll = math.random(1, 100)
+                    if roll <= main.hitChance then
+                        -- 计算指向目标的单位向量
+                        local toTarget = (cachedTarget.Position - origin)
+                        if toTarget.Magnitude > 0 then
+                            -- 如果原始 direction 存在并且是 Vector3，则保留其长度（Magnitude）
+                            local newDirection = nil
+                            if typeof(origDirection) == "Vector3" and origDirection.Magnitude > 0 then
+                                newDirection = toTarget.Unit * origDirection.Magnitude
+                            else
+                                -- 否则使用到目标的完整向量（保证能打到目标）
+                                newDirection = toTarget
+                            end
 
-                    -- 若原调用带有 RaycastParams（args[3]），尽量保留它
-                    -- 把 args[2]（direction）替换为 newDirection，然后调用原函数以返回真实 RaycastResult （userdata）
-                    local newArgs = {unpack(args)}
-                    newArgs[2] = newDirection
+                            -- 构造新的参数列表，替换 direction（args[2]）
+                            local newArgs = {unpack(args)}
+                            newArgs[2] = newDirection
 
-                    -- 调用原始方法并返回真实结果（这样不会破坏渲染/返回类型）
-                    return old(self, table.unpack(newArgs))
+                            -- 调用原始方法，返回真实的 RaycastResult（userdata），避免破坏渲染/类型期望
+                            return old(self, table.unpack(newArgs))
+                        end
+                    end
                 end
             end
         end
     end
 
-    -- 默认行为：调用原始方法（未做任何改动）
+    -- 默认行为：调用原始方法
     return old(self, ...)
 end))
 
@@ -173,7 +185,7 @@ local Window = WindUI:CreateWindow({
     Icon = "rbxassetid://115895976319223",
     IconThemed = true,
     Author = "idk",
-    Folder = "CloudHub",
+    Folder = "Hub",
     Size = UDim2.fromOffset(300, 380),
     Transparent = true,
     Theme = "Dark",
