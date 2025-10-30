@@ -84,7 +84,7 @@ local function getClosestHead(origin)
     return closestHead
 end
 
--- 更兼容的 __namecall 钩子（保留原始 direction 长度，保证远近一致性）
+-- 更兼容的 __namecall 钩子（保留原始 direction 长度，保证远近一致性，带移动预测/长度补偿）
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
@@ -94,33 +94,43 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
         local origDirection = args[2]
 
-        -- 仅在开启子弹追踪且有缓存目标时尝试修改参数
         if main.enable and cachedTarget then
-            -- 如果 cachedTarget.Position 无效则回退
             local okPos = pcall(function() return cachedTarget.Position end)
             if okPos and cachedTarget.Position then
-                -- 只有当允许穿墙或缓存时目标未被遮挡，才可能修改射线
                 if main.throughWalls or cachedTargetUnobstructed then
                     -- 命中率判定
                     local roll = math.random(1, 100)
                     if roll <= main.hitChance then
-                        -- 计算指向目标的单位向量
+                        -- 读取原始 direction 的长度（保留武器期望的射程）
+                        local origMag = 1000
+                        if typeof(origDirection) == "Vector3" and origDirection.Magnitude > 0 then
+                            origMag = origDirection.Magnitude
+                        end
+
+                        -- 计算到目标的向量并做简单移动预测
                         local toTarget = (cachedTarget.Position - origin)
+                        -- 简单预测时间：与距离成正比的短时预测（可调）
+                        local predictTime = math.clamp(toTarget.Magnitude / 100, 0, 0.5)
+                        local predictedPos = cachedTarget.Position
+                        -- 尝试从目标根部取速度（若存在）
+                        local root = cachedTarget.Parent and cachedTarget.Parent:FindFirstChild("HumanoidRootPart")
+                        if root and root:IsA("BasePart") then
+                            predictedPos = cachedTarget.Position + root.Velocity * predictTime
+                        end
+
+                        toTarget = (predictedPos - origin)
+
                         if toTarget.Magnitude > 0 then
-                            -- 如果原始 direction 存在并且是 Vector3，则保留其长度（Magnitude）
-                            local newDirection = nil
-                            if typeof(origDirection) == "Vector3" and origDirection.Magnitude > 0 then
-                                newDirection = toTarget.Unit * origDirection.Magnitude
-                            else
-                                -- 否则使用到目标的完整向量（保证能打到目标）
-                                newDirection = toTarget
-                            end
+                            -- 保留原始射线长度，但至少覆盖到目标（加少量缓冲以避免被截断）
+                            local neededMag = toTarget.Magnitude + 5 -- 5 studs buffer
+                            local newMag = math.max(origMag, neededMag)
+                            local newDirection = toTarget.Unit * newMag
 
                             -- 构造新的参数列表，替换 direction（args[2]）
                             local newArgs = {unpack(args)}
                             newArgs[2] = newDirection
 
-                            -- 调用原始方法，返回真实的 RaycastResult（userdata），避免破坏渲染/类型期望
+                            -- 调用原始方法并返回真实结果（userdata）
                             return old(self, table.unpack(newArgs))
                         end
                     end
@@ -185,7 +195,7 @@ local Window = WindUI:CreateWindow({
     Icon = "rbxassetid://115895976319223",
     IconThemed = true,
     Author = "idk",
-    Folder = "Hub",
+    Folder = "CloudHub",
     Size = UDim2.fromOffset(300, 380),
     Transparent = true,
     Theme = "Dark",
@@ -246,7 +256,7 @@ Main:Toggle({
 })
 
 Main:Toggle({
-    Title = "子弹穿墙",
+    Title = "子弹穿墙（允许穿墙）",
     Image = "bird",
     Value = false,
     Callback = function(state)
