@@ -7,7 +7,8 @@ local old
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false
+    friendcheck = false,
+    drawline = false -- 新增：控制目标连线显示，默认关闭
 }
 
 -- 返回最优先（视角内且靠近屏幕中心，若中心距离接近则选更近的世界距离）的头部
@@ -238,6 +239,16 @@ Main:Toggle({
     end
 })
 
+-- 新增：控制目标连线开关
+Main:Toggle({
+    Title = "显示目标连线",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.drawline = state
+    end
+})
+
 -- Drawing line (默认白色)，在有目标且目标在视口内时显示；连线在未开启子弹追踪时也可用
 local line = Drawing and Drawing.new and Drawing.new("Line") or nil
 if line then
@@ -253,13 +264,16 @@ end
 RunService.RenderStepped:Connect(function()
     if not line then return end
 
+    if not main.drawline then
+        line.Visible = false
+        return
+    end
+
     local targetHead, screenPos = getLineTarget()
     if targetHead and screenPos then
-        -- head 位置的屏幕坐标（再次计算以确保精确）
         local vp = Camera:WorldToViewportPoint(targetHead.Position)
         if vp.Z > 0 then
             local sp = Vector2.new(vp.X, vp.Y)
-            -- 从屏幕中心延伸到目标头部（或从屏中心到头部 —— 根据需要改为从十字点或屏幕下方）
             local viewportSize = Camera.ViewportSize
             local screenCenter = Vector2.new(viewportSize.X/2, viewportSize.Y/2)
 
