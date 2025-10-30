@@ -26,7 +26,7 @@ rayParams.FilterType = Enum.RaycastFilterType.Blacklist
 rayParams.FilterDescendantsInstances = {}
 rayParams.IgnoreWater = true
 
--- 自己猜这里是什么
+-- 6
 local function getClosestHead(origin)
     local closestHead
     local closestScreenDist = math.huge
@@ -84,33 +84,40 @@ local function getClosestHead(origin)
     return closestHead
 end
 
--- Hook 中尽量使用缓存的目标以减少每次被调用时的开销
+-- 替换：更加安全的 __namecall 钩子实现（避免返回 Lua table 导致 Aero 等架构停止渲染）
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
+    -- 只处理 Raycast 且来自游戏（非脚本自身调用）
     if method == "Raycast" and not checkcaller() then
+        -- origin = args[1], direction = args[2] (Roblox: Workspace:Raycast(origin, direction, params))
         local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
+        local direction = args[2]
 
+        -- 只在开启子弹追踪并存在缓存目标时尝试修改参数
         if main.enable and cachedTarget then
-            -- 在返回缓存目标前，检查穿墙设置与缓存的可见性结果：
-            -- 只有当 main.throughWalls == true 或 cachedTargetUnobstructed == true 才会返回目标，
-            -- 否则将继续执行原始射线（避免穿墙）。
+            -- 检查穿墙/可见性条件：若未允许穿墙且缓存标记为不可见，则不修改射线（避免穿墙）
             if main.throughWalls or cachedTargetUnobstructed then
+                -- 命中率判定
                 local roll = math.random(1, 100)
                 if roll <= main.hitChance then
-                    return {
-                        Instance = cachedTarget,
-                        Position = cachedTarget.Position,
-                        Normal = (origin - cachedTarget.Position).Unit,
-                        Material = Enum.Material.Plastic,
-                        Distance = (cachedTarget.Position - origin).Magnitude
-                    }
+                    -- 计算新的方向向量：从 origin 指向目标位置
+                    local newDirection = (cachedTarget.Position - origin)
+
+                    -- 若原调用带有 RaycastParams（args[3]），尽量保留它
+                    -- 把 args[2]（direction）替换为 newDirection，然后调用原函数以返回真实 RaycastResult （userdata）
+                    local newArgs = {unpack(args)}
+                    newArgs[2] = newDirection
+
+                    -- 调用原始方法并返回真实结果（这样不会破坏渲染/返回类型）
+                    return old(self, table.unpack(newArgs))
                 end
             end
-            -- 若不满足穿墙或可见性条件，落回原始行为（即不强制命中）
         end
     end
+
+    -- 默认行为：调用原始方法（未做任何改动）
     return old(self, ...)
 end))
 
@@ -227,7 +234,7 @@ Main:Toggle({
 })
 
 Main:Toggle({
-    Title = "子弹穿墙（允许穿墙）",
+    Title = "子弹穿墙",
     Image = "bird",
     Value = false,
     Callback = function(state)
