@@ -12,12 +12,25 @@ local main = {
     line = false
 }
 
+local function isVisible(origin, targetPos, targetChar)
+    local direction = (targetPos - origin)
+    local distance = direction.Magnitude
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {LocalPlayer.Character}
+    local result = Workspace:Raycast(origin, direction, params)
+    if result then
+        return result.Instance:IsDescendantOf(targetChar)
+    end
+    return false
+end
+
 local function getClosestHead()
     local closestHead
     local closestDistance = math.huge
+    local closestChar
 
-    if not LocalPlayer.Character then return end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil end
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -44,13 +57,14 @@ local function getClosestHead()
                         if distance < closestDistance then
                             closestHead = head
                             closestDistance = distance
+                            closestChar = character
                         end
                     end
                 end
             end
         end
     end
-    return closestHead
+    return closestHead, closestChar
 end
 
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -58,32 +72,32 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local args = {...}
 
     if method == "Raycast" and not checkcaller() then
-        local origin = args[1] or Camera.CFrame.Position
+        local origin = args[1]
+        local direction = args[2]
 
         if main.enable then
-            local closestHead = getClosestHead()
+            local closestHead, closestChar = getClosestHead()
             if closestHead then
-                local direction = (closestHead.Position - origin).Unit
-                local distance = (closestHead.Position - origin).Magnitude
-                local shouldOverride = main.wallpen
+                local headPos = closestHead.Position
+                local dirToHead = (headPos - origin)
+                local distToHead = dirToHead.Magnitude
+                local unitToHead = dirToHead.Unit
 
+                local shouldTrack = main.wallpen
                 if not main.wallpen then
-                    local params = RaycastParams.new()
-                    params.FilterType = Enum.RaycastFilterType.Exclude
-                    params.FilterDescendants = {LocalPlayer.Character, closestHead.Parent}
-                    local realResult = Workspace:Raycast(origin, direction * distance, params)
-                    if not realResult then
-                        shouldOverride = true
+                    local visible = isVisible(origin, headPos, closestChar)
+                    if visible then
+                        shouldTrack = true
                     end
                 end
 
-                if shouldOverride then
+                if shouldTrack then
                     return {
                         Instance = closestHead,
-                        Position = closestHead.Position,
-                        Normal = direction * -1,
-                        Material = Enum.Material.Plastic,
-                        Distance = distance
+                        Position = headPos,
+                        Normal = -unitToHead,
+                        Material = closestHead.Material,
+                        Distance = distToHead
                     }
                 end
             end
@@ -102,7 +116,7 @@ RunService.RenderStepped:Connect(function()
     if main.enable and main.line then
         local closestHead = getClosestHead()
         if closestHead then
-            local screenPos, _ = Camera:WorldToViewportPoint(closestHead.Position)
+            local screenPos = Camera:WorldToViewportPoint(closestHead.Position)
             tracerLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
             tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
             tracerLine.Visible = true
