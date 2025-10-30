@@ -70,9 +70,9 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                 if not main.wallpen then
                     local params = RaycastParams.new()
                     params.FilterType = Enum.RaycastFilterType.Exclude
-                    params.FilterDescendants = {LocalPlayer.Character}
+                    params.FilterDescendants = {LocalPlayer.Character, closestHead.Parent}
                     local realResult = Workspace:Raycast(origin, direction * distance, params)
-                    if realResult and realResult.Instance == closestHead then
+                    if not realResult then
                         shouldTrack = true
                     end
                 end
