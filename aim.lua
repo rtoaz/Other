@@ -76,38 +76,16 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
                         Distance = (closestHead.Position - origin).Magnitude
                     }
                 else
-                    -- 关闭穿墙：检查 LOS
-                    local rayParams = RaycastParams.new()
-                    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-                    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-                    rayParams.IgnoreWater = true
-
-                    local dirToHead = (closestHead.Position - origin)
-                    local losResult = nil
-                    local success, res = pcall(function()
-                        return old(Workspace, origin, dirToHead, rayParams)
-                    end)
-                    if success then losResult = res end
-
-                    if losResult and losResult.Instance then
-                        local hitInst = losResult.Instance
-                        if hitInst == closestHead or hitInst:IsDescendantOf(closestHead.Parent) then
-                            -- 可直射命中头部 -> 指向头部
-                            return {
-                                Instance = closestHead,
-                                Position = closestHead.Position,
-                                Normal = (origin - closestHead.Position).Unit,
-                                Material = Enum.Material.Plastic,
-                                Distance = (closestHead.Position - origin).Magnitude
-                            }
-                        else
-                            -- 被墙挡住 -> 保持原射线命中结果（不会伪穿墙）
-                            return losResult
-                        end
-                    else
-                        -- LOS 没命中 -> 不覆盖任何东西
-                        return old(self, unpack(args))
-                    end
+                    -- 关闭穿墙：只改变客户端追踪/视觉，不影响服务器真实碰撞
+                    -- 返回目标头部信息以便客户端追踪显示，但服务器仍然用原始射线判断
+                    local fakeResult = {
+                        Instance = closestHead,
+                        Position = closestHead.Position,
+                        Normal = (origin - closestHead.Position).Unit,
+                        Material = Enum.Material.Plastic,
+                        Distance = (closestHead.Position - origin).Magnitude
+                    }
+                    return fakeResult
                 end
             end
         end
