@@ -6,11 +6,13 @@ local old
 local main = {
     enable = false,
     teamcheck = false,
-    friendcheck = false
+    friendcheck = false,
+    throughWalls = false -- 子弹穿墙，默认关闭
 }
 
--- 返回：只在视角内的玩家头部，并按屏幕中心优先（越靠近屏幕中心优先），可被遮挡也锁定
-local function getClosestHead()
+-- 返回：只在视角内的玩家头部，并按屏幕中心优先（越靠近屏幕中心优先）
+-- 参数 origin: 可选，射线起点（用于可见性检测）。
+local function getClosestHead(origin)
     local closestHead
     local closestScreenDist = math.huge
 
@@ -22,8 +24,16 @@ local function getClosestHead()
         if not Camera then return end
     end
 
+    origin = origin or Camera.CFrame.Position
+
     local viewportSize = Camera.ViewportSize
     local screenCenter = Vector2.new(viewportSize.X/2, viewportSize.Y/2)
+
+    -- 复用 RaycastParams 减少频繁创建
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    rayParams.IgnoreWater = true
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -46,12 +56,32 @@ local function getClosestHead()
                 if root and head and humanoid and humanoid.Health > 0 then
                     local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
                     if onScreen and screenPoint.Z > 0 then
-                        local screen2 = Vector2.new(screenPoint.X, screenPoint.Y)
-                        local screenDist = (screen2 - screenCenter).Magnitude
+                        -- 可见性检测：当 throughWalls == false 时需要检测是否被遮挡
+                        local unobstructed = true
+                        if not main.throughWalls then
+                            local direction = head.Position - origin
+                            local ray = Workspace:Raycast(origin, direction, rayParams)
+                            if ray then
+                                -- 如果射线命中的是目标角色的某个部件，则认为未被遮挡
+                                if ray.Instance and ray.Instance:IsDescendantOf(character) then
+                                    unobstructed = true
+                                else
+                                    unobstructed = false
+                                end
+                            else
+                                -- 未命中任何物体，视为未被遮挡
+                                unobstructed = true
+                            end
+                        end
 
-                        if screenDist < closestScreenDist then
-                            closestScreenDist = screenDist
-                            closestHead = head
+                        if unobstructed then
+                            local screen2 = Vector2.new(screenPoint.X, screenPoint.Y)
+                            local screenDist = (screen2 - screenCenter).Magnitude
+
+                            if screenDist < closestScreenDist then
+                                closestScreenDist = screenDist
+                                closestHead = head
+                            end
                         end
                     end
                 end
@@ -70,7 +100,7 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
 
         if main.enable then
-            local closestHead = getClosestHead()
+            local closestHead = getClosestHead(origin)
             if closestHead then
                 return {
                     Instance = closestHead,
@@ -151,6 +181,15 @@ Main:Toggle({
     end
 })
 
+Main:Toggle({
+    Title = "子弹穿墙",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.throughWalls = state
+    end
+})
+
 -- ===== 增加：目标连线（默认白色） =====
 local RunService = game:GetService("RunService")
 local DrawingAvailable, drawNew = pcall(function() return Drawing.new end)
@@ -180,7 +219,7 @@ RunService.RenderStepped:Connect(function()
     end
 
     if main.enable and main.drawLine and LineCreationOk then
-        local closest = getClosestHead()
+        local closest = getClosestHead(Camera.CFrame.Position)
         if closest and closest.Parent then
             local screenPoint, onScreen = Camera:WorldToViewportPoint(closest.Position)
             if onScreen and screenPoint.Z > 0 then
