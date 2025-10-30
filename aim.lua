@@ -17,8 +17,8 @@ local main = {
 -- 尝试创建 Drawing 线条（如果环境支持）
 local DrawLineObject
 pcall(function()
-    DrawLineObject = Drawing and Drawing.new and Drawing.new("Line")
-    if DrawLineObject then
+    if Drawing and Drawing.new then
+        DrawLineObject = Drawing.new("Line")
         DrawLineObject.Visible = false
         DrawLineObject.Thickness = 2
         DrawLineObject.Transparency = 1
