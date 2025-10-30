@@ -7,7 +7,7 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    throughWalls = false, -- 子弹穿墙，默认关闭
+    throughWalls = false, -- 子弹穿墙，默认关闭（注意：锁定视角内目标不再依赖可见性）
     hitChance = 100 -- 命中率（百分比），默认100
 }
 
@@ -16,11 +16,10 @@ math.randomseed(tick())
 
 -- 缓存目标以减少频繁计算（避免卡顿）
 local cachedTarget = nil
-local cachedTargetUnobstructed = false -- 缓存目标是否在上次检测时未被遮挡
 local cacheInterval = 0.08 -- 每 0.08s 更新一次目标（约 12.5Hz），可根据需要调低频率以降低卡顿
 local cacheAccum = 0
 
--- 复用 RaycastParams 避免频繁创建
+-- 复用 RaycastParams 避免频繁创建（仍保留以供需要）
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Blacklist
 rayParams.FilterDescendantsInstances = {}
@@ -66,7 +65,7 @@ local function getClosestHead(origin)
 
                 if head and humanoid and humanoid.Health > 0 then
                     local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
-                    -- 要求 onScreen 为 true：仅锁定那些处于屏幕视野内的目标（即使被遮挡仍视为候选）
+                    -- 要求 onScreen 为 true：仅锁定那些处于屏幕视野内的目标（即使被遮挡仍视为有效）
                     if onScreen and screenPoint.Z > 0 then
                         local screen2 = Vector2.new(screenPoint.X, screenPoint.Y)
                         local screenDist = (screen2 - screenCenter).Magnitude
@@ -84,7 +83,7 @@ local function getClosestHead(origin)
     return closestHead
 end
 
--- 更兼容的 __namecall 钩子（保留原始 direction 长度，保证远近一致性，带移动预测/长度补偿）
+-- 更兼容的 __namecall 钩子（保留原始 direction 长度，保证远近一致性，忽略可见性判断以满足“视角内即锁定”的要求）
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
@@ -94,44 +93,47 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local origin = args[1] or (Camera and Camera.CFrame.Position) or Workspace.CurrentCamera.CFrame.Position
         local origDirection = args[2]
 
+        -- 仅在开启子弹追踪并存在缓存目标时尝试修改参数
         if main.enable and cachedTarget then
             local okPos = pcall(function() return cachedTarget.Position end)
             if okPos and cachedTarget.Position then
-                if main.throughWalls or cachedTargetUnobstructed then
-                    -- 命中率判定
-                    local roll = math.random(1, 100)
-                    if roll <= main.hitChance then
-                        -- 读取原始 direction 的长度（保留武器期望的射程）
-                        local origMag = 1000
-                        if typeof(origDirection) == "Vector3" and origDirection.Magnitude > 0 then
-                            origMag = origDirection.Magnitude
-                        end
+                -- 命中率判定
+                local roll = math.random(1, 100)
+                if roll <= main.hitChance then
+                    -- 读取原始 direction 的长度（保留武器期望的射程）
+                    local origMag = 1000
+                    if typeof(origDirection) == "Vector3" and origDirection.Magnitude > 0 then
+                        origMag = origDirection.Magnitude
+                    end
 
-                        -- 计算到目标的向量并做简单移动预测
-                        local toTarget = (cachedTarget.Position - origin)
-                        -- 简单预测时间：与距离成正比的短时预测（可调）
-                        local predictTime = math.clamp(toTarget.Magnitude / 100, 0, 0.5)
-                        local predictedPos = cachedTarget.Position
-                        -- 尝试从目标根部取速度（若存在）
-                        local root = cachedTarget.Parent and cachedTarget.Parent:FindFirstChild("HumanoidRootPart")
-                        if root and root:IsA("BasePart") then
-                            predictedPos = cachedTarget.Position + root.Velocity * predictTime
-                        end
+                    -- 计算到目标的向量并做简单移动预测
+                    local toTarget = (cachedTarget.Position - origin)
+                    -- 简单预测时间：与距离成正比的短时预测（可调）
+                    local predictTime = math.clamp(toTarget.Magnitude / 100, 0, 0.5)
+                    local predictedPos = cachedTarget.Position
+                    -- 尝试从目标根部取速度（若存在）
+                    local root = cachedTarget.Parent and cachedTarget.Parent:FindFirstChild("HumanoidRootPart")
+                    if root and root:IsA("BasePart") then
+                        predictedPos = cachedTarget.Position + root.Velocity * predictTime
+                    end
 
-                        toTarget = (predictedPos - origin)
+                    toTarget = (predictedPos - origin)
 
-                        if toTarget.Magnitude > 0 then
-                            -- 保留原始射线长度，但至少覆盖到目标（加少量缓冲以避免被截断）
-                            local neededMag = toTarget.Magnitude + 5 -- 5 studs buffer
-                            local newMag = math.max(origMag, neededMag)
-                            local newDirection = toTarget.Unit * newMag
+                    if toTarget.Magnitude > 0 then
+                        -- 保留原始射线长度，但至少覆盖到目标（加少量缓冲以避免被截断）
+                        local neededMag = toTarget.Magnitude + 5 -- 5 studs buffer
+                        local newMag = math.max(origMag, neededMag)
+                        local newDirection = toTarget.Unit * newMag
 
-                            -- 构造新的参数列表，替换 direction（args[2]）
-                            local newArgs = {unpack(args)}
-                            newArgs[2] = newDirection
+                        -- 构造新的参数列表，替换 direction（args[2]）并调用原始方法返回真实结果
+                        local ok, result = pcall(function()
+                            return old(self, origin, newDirection, args[3])
+                        end)
 
-                            -- 调用原始方法并返回真实结果（userdata）
-                            return old(self, table.unpack(newArgs))
+                        if ok then
+                            return result
+                        else
+                            return old(self, ...)
                         end
                     end
                 end
@@ -139,51 +141,28 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         end
     end
 
-    -- 默认行为：调用原始方法
+    -- 默认行为：调用原始方法（未做任何改动）
     return old(self, ...)
 end))
 
--- 周期性更新 cachedTarget 与 cachedTargetUnobstructed，减少每次射线调用时的计算量
+-- 周期性更新 cachedTarget，减少每次射线调用时的计算量（不再记录可见性，视角内即为候选）
 local RunService = game:GetService("RunService")
 RunService.Heartbeat:Connect(function(dt)
     cacheAccum = cacheAccum + dt
     if cacheAccum >= cacheInterval then
         cacheAccum = 0
         if main.enable then
-            local ok, target, unob = pcall(function()
+            local ok, target = pcall(function()
                 -- 选取视角内最优目标（不考虑遮挡）
-                local head = getClosestHead(Camera and Camera.CFrame.Position or nil)
-                if not head then
-                    return nil, nil
-                end
-
-                -- 检查当前帧该目标是否未被遮挡（射线检测）
-                local direction = head.Position - (Camera and Camera.CFrame.Position or workspace.CurrentCamera.CFrame.Position)
-                local ray = Workspace:Raycast((Camera and Camera.CFrame.Position or workspace.CurrentCamera.CFrame.Position), direction, rayParams)
-                local unobstructed = false
-                if ray then
-                    if ray.Instance and ray.Instance:IsDescendantOf(head.Parent) then
-                        unobstructed = true
-                    else
-                        unobstructed = false
-                    end
-                else
-                    unobstructed = true
-                end
-
-                return head, unobstructed
+                return getClosestHead(Camera and Camera.CFrame.Position or nil)
             end)
-
             if ok then
                 cachedTarget = target
-                cachedTargetUnobstructed = unob or false
             else
                 cachedTarget = nil
-                cachedTargetUnobstructed = false
             end
         else
             cachedTarget = nil
-            cachedTargetUnobstructed = false
         end
     end
 end)
@@ -233,7 +212,7 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
-        if not state then cachedTarget = nil cachedTargetUnobstructed = false end
+        if not state then cachedTarget = nil end
     end
 })
 
@@ -256,7 +235,7 @@ Main:Toggle({
 })
 
 Main:Toggle({
-    Title = "子弹穿墙（允许穿墙）",
+    Title = "子弹穿墙",
     Image = "bird",
     Value = false,
     Callback = function(state)
