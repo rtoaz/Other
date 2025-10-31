@@ -137,7 +137,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300， 270)，
+    Size = UDim2.fromOffset(300，270)，
     Transparent = true,
     Theme = "Dark",
     User = { Enabled = true, Callback = function() print("clicked") end, Anonymous = false },
