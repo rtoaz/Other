@@ -1,34 +1,44 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
 local main = {
     enable = false,
-    wallbang = false,
     teamcheck = false,
     friendcheck = false,
-    drawLine = false  -- 新增：连线开关
+    wallbang = false -- 子弹穿墙模式，默认关闭
 }
 
--- 缓存目标
-local cachedClosestHead = nil
-local line = Drawing.new("Line")
-line.Visible = false
-line.Color = Color3.fromRGB(255, 255, 255)  -- 白色
-line.Thickness = 2
-line.Transparency = 1
-
-local function updateClosestHead()
-    cachedClosestHead = nil
-    local closestScreenDistance = math.huge
-    local viewportSize = Camera.ViewportSize
-    local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
-
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        return
+-- 新增：目标连线开关（默认关闭）与绘图对象（默认白色）
+main.targetLine = false
+local DrawingAvailable, Drawing = pcall(function() return Drawing end)
+local targetLineDrawing = nil
+if DrawingAvailable and Drawing then
+    local ok, lineObj = pcall(function()
+        local l = Drawing.new("Line")
+        l.Visible = false
+        l.From = Vector2.new(0,0)
+        l.To = Vector2.new(0,0)
+        l.Color = Color3.fromRGB(255,255,255) -- 默认白色
+        l.Thickness = 1.5
+        l.Transparency = 1
+        return l
+    end)
+    if ok then
+        targetLineDrawing = lineObj
     end
+end
+
+local function getClosestHead()
+    local closestHead
+    local closestScore = math.huge
+
+    if not LocalPlayer.Character then return end
+    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+
+    local viewportSize = Camera.ViewportSize
+    local center = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -49,86 +59,67 @@ local function updateClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
-                    if onScreen and screenPoint.Z > 0 then
-                        local screenDist = (Vector2.new(screenPoint.X, screenPoint.Y) - screenCenter).Magnitude
-                        if screenDist < closestScreenDistance then
-                            cachedClosestHead = head
-                            closestScreenDistance = screenDist
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    -- 只考虑视角内的玩家
+                    if onScreen then
+                        local screenVec = Vector2.new(screenPos.X, screenPos.Y)
+                        local distToCenter = (screenVec - center).Magnitude
+                        -- 优先视线中间（距离中心小的优先），同时作为评分使用
+                        if distToCenter < closestScore then
+                            closestHead = head
+                            closestScore = distToCenter
                         end
                     end
                 end
             end
         end
     end
+    return closestHead
 end
 
--- 每帧更新目标 + 连线
-RunService.Heartbeat:Connect(function()
-    if main.enable then
-        updateClosestHead()
-
-        -- 更新连线
-        if main.drawLine and cachedClosestHead then
-            local headScreen, onScreen = Camera:WorldToViewportPoint(cachedClosestHead.Position)
-            if onScreen then
-                local center = Camera.ViewportSize / 2
-                line.From = center
-                line.To = Vector2.new(headScreen.X, headScreen.Y)
-                line.Visible = true
-            else
-                line.Visible = false
-            end
-        else
-            line.Visible = false
-        end
-    else
-        cachedClosestHead = nil
-        line.Visible = false
-    end
-end)
-
--- 清理连线（退出时）
-game:GetService("Players").PlayerRemoving:Connect(function(plr)
-    if plr == LocalPlayer then
-        line:Remove()
-    end
-end)
-
--- Raycast Hook
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and not checkcaller() and self == Workspace then
-        local origin = args[1]
-        local direction = args[2]
-        local raycastParams = args[3]
+    if method == "Raycast" and not checkcaller() then
+        local origin = args[1] or Camera.CFrame.Position
 
-        if main.enable and cachedClosestHead then
-            local headDirection = cachedClosestHead.Position - origin
-            local headDistance = headDirection.Magnitude
-            headDirection = headDirection.Unit * math.max(headDistance, direction.Magnitude)
+        if main.enable then
+            local closestHead = getClosestHead()
+            if closestHead then
+                local direction = (closestHead.Position - origin).Unit
+                local distance = (closestHead.Position - origin).Magnitude
 
-            if main.wallbang then
-                -- 穿墙：强制击中
+                -- 使用原始（被保存的）metamethod来执行真实的射线检测以判断是否被遮挡
+                local realResult = old(self, origin, direction * distance)
+
+                -- 当“穿墙模式关闭”且射线检测到的第一个命中不是目标（即被墙或其他物体挡住）时，调用原始行为（不伪造命中）
+                if not main.wallbang then
+                    if realResult and realResult.Instance then
+                        -- 如果真实命中的是目标或目标的子部件，则允许伪造命中（视为未被阻挡）
+                        if realResult.Instance:IsDescendantOf(closestHead.Parent) == false then
+                            return old(self, ...)
+                        end
+                    else
+                        -- 没有真实命中（视线透明），继续走后面的伪造命中逻辑（允许命中）
+                        -- do nothing here, 会走到返回伪造命中的代码
+                    end
+                end
+
+                -- 否则（穿墙模式打开 或 目标可见），返回伪造的命中结果
                 return {
-                    Instance = cachedClosestHead,
-                    Position = cachedClosestHead.Position,
-                    Normal = (origin - cachedClosestHead.Position).Unit,
+                    Instance = closestHead,
+                    Position = closestHead.Position,
+                    Normal = (origin - closestHead.Position).Unit,
                     Material = Enum.Material.Plastic,
-                    Distance = headDistance
+                    Distance = distance
                 }
-            else
-                -- 非穿墙：调整方向，真实检测
-                return old(self, origin, headDirection, raycastParams)
             end
         end
     end
     return old(self, ...)
 end))
 
--- WindUI
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local Window = WindUI:CreateWindow({
@@ -137,10 +128,14 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300，270)，
+    Size = UDim2.fromOffset(300, 270),
     Transparent = true,
     Theme = "Dark",
-    User = { Enabled = true, Callback = function() print("clicked") end, Anonymous = false },
+    User = {
+        Enabled = true,
+        Callback = function() print("clicked") end,
+        Anonymous = false
+    },
     SideBarWidth = 200,
     ScrollBarEnabled = true,
 })
@@ -150,44 +145,92 @@ Window:EditOpenButton({
     Icon = "monitor",
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
-    Color = ColorSequence.new(Color3.fromHex("FF0F7B"), Color3.fromHex("F89B29")),
+    Color = ColorSequence.new(
+        Color3.fromHex("FF0F7B"), 
+        Color3.fromHex("F89B29")
+    ),
     Draggable = true,
 })
 
-local MainSection = Window:Section({ Title = "子追", Opened = true })
-local Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
+MainSection = Window:Section({
+    Title = "子追",
+    Opened = true,
+})
+
+Main = MainSection:Tab({ Title = "设置", Icon = "Sword" })
 
 Main:Toggle({
     Title = "开启子弹追踪",
     Image = "bird",
     Value = false,
-    Callback = function(state) main.enable = state end
-})
-
-Main:Toggle({
-    Title = "开启子弹穿墙",
-    Image = "bird",
-    Value = false,
-    Callback = function(state) main.wallbang = state end
-})
-
-Main:Toggle({
-    Title = "目标连线",   -- 新增
-    Image = "bird",
-    Value = false,
-    Callback = function(state) main.drawLine = state end
+    Callback = function(state)
+        main.enable = state
+    end
 })
 
 Main:Toggle({
     Title = "开启队伍验证",
     Image = "bird",
     Value = false,
-    Callback = function(state) main.teamcheck = state end
+    Callback = function(state)
+        main.teamcheck = state
+    end
 })
 
 Main:Toggle({
     Title = "开启好友验证",
     Image = "bird",
     Value = false,
-    Callback = function(state) main.friendcheck = state end
+    Callback = function(state)
+        main.friendcheck = state
+    end
 })
+
+Main:Toggle({
+    Title = "开启子弹穿墙",
+    Image = "shield",
+    Value = false,
+    Callback = function(state)
+        main.wallbang = state
+    end
+})
+
+-- 增加 UI 开关：目标连线（默认白色，默认关闭，子弹追踪未开启也有效）
+Main:Toggle({
+    Title = "显示目标连线",
+    Image = "line",
+    Value = false,
+    Callback = function(state)
+        main.targetLine = state
+        if targetLineDrawing then
+            targetLineDrawing.Visible = state
+        end
+    end
+})
+
+-- 更新连线位置（每帧）——即使子弹追踪未开启也会生效
+local RunService = game:GetService("RunService")
+RunService.RenderStepped:Connect(function()
+    if targetLineDrawing then
+        if main.targetLine then
+            local target = getClosestHead()
+            if target and target.Parent then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(target.Position)
+                if onScreen then
+                    local viewportSize = Camera.ViewportSize
+                    local center = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+                    -- 从视角中心到目标头部的连线
+                    targetLineDrawing.From = center
+                    targetLineDrawing.To = Vector2.new(screenPos.X, screenPos.Y)
+                    targetLineDrawing.Visible = true
+                else
+                    targetLineDrawing.Visible = false
+                end
+            else
+                targetLineDrawing.Visible = false
+            end
+        else
+            targetLineDrawing.Visible = false
+        end
+    end
+end)
