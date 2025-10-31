@@ -8,20 +8,27 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    wallpen = false,
-    line = false
+    wallbang = false  -- 穿墙开关
 }
 
-local currentTargetHead = nil
-local currentTargetChar = nil
-local targetUpdateConnection
+-- 获取屏幕中心
+local function getScreenCenter()
+    local viewportSize = Camera.ViewportSize
+    return Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+end
 
-local function getClosestHead()
+local function getClosestHead(origin)
     local closestHead
-    local closestDistance = math.huge
-    local closestChar
+    local closestScreenDistance = math.huge
 
-    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil, nil end
+    if not LocalPlayer.Character then return nil end
+    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil end
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}  -- 忽略自己
+
+    local screenCenter = getScreenCenter()
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -42,114 +49,60 @@ local function getClosestHead()
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    local _, onScreen = Camera:WorldToViewportPoint(head.Position)
-                    if onScreen then
-                        local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-                        if distance < closestDistance then
+                    -- 新增：检查是否在视角内（屏幕投影）
+                    local screenPos, onScreen = Camera:WorldToScreenPoint(head.Position)
+                    local inView = onScreen and screenPos.X > 0 and screenPos.X < Camera.ViewportSize.X and screenPos.Y > 0 and screenPos.Y < Camera.ViewportSize.Y
+                    
+                    if inView then
+                        local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                        
+                        -- 新增：LOS检查（仅当穿墙关闭时）
+                        local hasLOS = true
+                        if not main.wallbang then
+                            local direction = head.Position - origin
+                            local losResult = Workspace:Raycast(origin, direction, rayParams)
+                            if losResult then
+                                -- 如果击中了非目标玩家的部分，则有障碍
+                                if not losResult.Instance:IsDescendantOf(character) then
+                                    hasLOS = false
+                                end
+                            end
+                        end
+
+                        if hasLOS and screenDistance < closestScreenDistance then
                             closestHead = head
-                            closestDistance = distance
-                            closestChar = character
+                            closestScreenDistance = screenDistance
                         end
                     end
                 end
             end
         end
     end
-    return closestHead, closestChar
+    return closestHead
 end
-
--- Update target every frame only if enabled
-if targetUpdateConnection then targetUpdateConnection:Disconnect() end
-targetUpdateConnection = RunService.Heartbeat:Connect(function()
-    if main.enable then
-        currentTargetHead, currentTargetChar = getClosestHead()
-    else
-        currentTargetHead, currentTargetChar = nil, nil
-    end
-end)
 
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and not checkcaller() and self == Workspace then
-        local origin = args[1]
-        local direction = args[2]
-        local params = args[3] or RaycastParams.new()
+    if method == "Raycast" and not checkcaller() then
+        local origin = args[1] or Camera.CFrame.Position
 
-        if main.enable and currentTargetHead and currentTargetChar then
-            local targetPos = currentTargetHead.Position
-            local dirToTarget = (targetPos - origin).Unit
-            local distToTarget = (targetPos - origin).Magnitude
-
-            local customParams = RaycastParams.new()
-            customParams.FilterType = Enum.RaycastFilterType.Exclude
-            customParams.FilterDescendantsInstances = {LocalPlayer.Character}
-
-            local rayDir = dirToTarget * distToTarget
-            local result = Workspace:Raycast(origin, rayDir, customParams)
-
-            if main.wallpen then
-                -- Always hit head
+        if main.enable then
+            local closestHead = getClosestHead(origin)  -- 传入origin用于LOS
+            if closestHead then
                 return {
-                    Instance = currentTargetHead,
-                    Position = targetPos,
-                    Normal = -dirToTarget,
-                    Material = currentTargetHead.Material,
-                    Distance = distToTarget
-                }
-            elseif result then
-                -- Check if hit is on target
-                if result.Instance:IsDescendantOf(currentTargetChar) then
-                    -- Hit target, force head
-                    return {
-                        Instance = currentTargetHead,
-                        Position = targetPos,
-                        Normal = -dirToTarget,
-                        Material = currentTargetHead.Material,
-                        Distance = distToTarget
-                    }
-                else
-                    -- Hit wall in front of head
-                    return {
-                        Instance = result.Instance,
-                        Position = result.Position,
-                        Normal = result.Normal,
-                        Material = result.Material,
-                        Distance = result.Distance
-                    }
-                end
-            else
-                -- No hit, clear to target, force head
-                return {
-                    Instance = currentTargetHead,
-                    Position = targetPos,
-                    Normal = -dirToTarget,
-                    Material = currentTargetHead.Material,
-                    Distance = distToTarget
+                    Instance = closestHead,
+                    Position = closestHead.Position,
+                    Normal = (origin - closestHead.Position).Unit,
+                    Material = Enum.Material.Plastic,
+                    Distance = (closestHead.Position - origin).Magnitude
                 }
             end
         end
     end
     return old(self, ...)
 end))
-
-local tracerLine = Drawing.new("Line")
-tracerLine.Color = Color3.new(1, 1, 1)
-tracerLine.Thickness = 2
-tracerLine.Transparency = 1
-tracerLine.Visible = false
-
-RunService.RenderStepped:Connect(function()
-    if main.enable and main.line and currentTargetHead then
-        local screenPos = Camera:WorldToViewportPoint(currentTargetHead.Position)
-        tracerLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-        tracerLine.To = Vector2.new(screenPos.X, screenPos.Y)
-        tracerLine.Visible = true
-    else
-        tracerLine.Visible = false
-    end
-end)
 
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
@@ -222,15 +175,6 @@ Main:Toggle({
     Image = "bird",
     Value = false,
     Callback = function(state)
-        main.wallpen = state
-    end
-})
-
-Main:Toggle({
-    Title = "开启目标连线",
-    Image = "bird",
-    Value = false,
-    Callback = function(state)
-        main.line = state
+        main.wallbang = state
     end
 })
