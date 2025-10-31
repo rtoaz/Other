@@ -34,14 +34,14 @@ if DrawingAvailable and Drawing then
     end
 end
 
--- 调整与节流参数（可根据需要微调）
+-- 调整与节流参数（已做小幅放宽以提高命中可靠性）
 local UPDATE_HZ = 30                       -- 目标缓存更新频率（Hz）
 local HEARTBEAT_INTERVAL = 1 / UPDATE_HZ
-local INTERCEPT_WINDOW = 0.03              -- 仅在开火瞬间短窗内拦截（秒）
-local ORIGIN_DIST_THRESHOLD = 5            -- origin 距离摄像机阈值（更严格）
-local DIRECTION_DOT_THRESHOLD = 0.97      -- 射线方向与相机朝向一致性阈值（更严格）
+local INTERCEPT_WINDOW = 0.06              -- 短窗（开火瞬间）放宽到 0.06s
+local ORIGIN_DIST_THRESHOLD = 8            -- origin 距离摄像机阈值（放宽到 8）
+local DIRECTION_DOT_THRESHOLD = 0.95       -- 方向一致性阈值（放宽到 0.95）
 
--- 缓存 viewportSize，避免每帧频繁读取
+-- 缓存 viewportSize，避免频繁读取
 local cachedViewportSize = Vector2.new(0,0)
 local function updateViewportCache()
     if Camera and Camera.ViewportSize then
@@ -53,7 +53,7 @@ local function updateViewportCache()
 end
 updateViewportCache()
 
--- 选择视角内最佳目标（距离屏幕中心最近）
+-- 选择视角内最佳目标（屏幕中心优先）
 local function pickBestTargetFromView()
     if not LocalPlayer.Character then return nil end
     if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil end
@@ -103,7 +103,7 @@ local function pickBestTargetFromView()
     return best
 end
 
--- 用 Heartbeat 节流更新目标与连线（避免在 RenderStepped 做大量工作）
+-- Heartbeat 节流更新目标与连线
 do
     local accumulator = 0
     RunService.Heartbeat:Connect(function(dt)
@@ -111,14 +111,11 @@ do
         if accumulator >= HEARTBEAT_INTERVAL then
             accumulator = accumulator - HEARTBEAT_INTERVAL
 
-            -- 更新 viewport 缓存（若有变化）
             updateViewportCache()
 
-            -- 更新缓存目标
             local best = pickBestTargetFromView()
             main.currentTarget = best
 
-            -- 更新连线（仅在 targetLine 打开时）
             if targetLineDrawing then
                 if main.targetLine and best and best.Parent then
                     local screenPos, onScreen = Camera:WorldToViewportPoint(best.Position)
@@ -139,13 +136,12 @@ do
     end)
 end
 
--- 开火短窗口控制（只在短时间内拦截 Raycast）
+-- 开火短窗口控制
 local interceptWindowEnd = 0
 local function startInterceptWindow()
     interceptWindowEnd = tick() + INTERCEPT_WINDOW
 end
 
--- 输入监听（鼠标/触摸）——尽量用非阻塞、轻量的连接
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     local t = input.UserInputType
@@ -154,7 +150,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
--- 兼容 LocalPlayer:GetMouse()（有些环境需要）
 pcall(function()
     local m = LocalPlayer and LocalPlayer:GetMouse()
     if m then
@@ -164,34 +159,29 @@ pcall(function()
     end
 end)
 
--- 保守化的 Raycast 拦截（仅在严格条件下返回伪造命中）
+-- 保守但有备用路径的 Raycast 拦截：短窗内或满足持续条件时都会伪造命中
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
     if method == "Raycast" and not checkcaller() then
-        -- 不在拦截窗口则直接放行
-        if tick() > interceptWindowEnd then
-            return old(self, ...)
-        end
-
-        -- 如果功能没开也放行
+        -- 功能未开启直接放行
         if not main.enable then
             return old(self, ...)
         end
 
-        -- 获取 origin 与方向（尽量轻量）
+        -- 获取 origin 与方向
         local origin = args[1] or (Camera and Camera.CFrame and Camera.CFrame.Position) or Vector3.new()
         local directionArg = args[2]
 
-        -- origin 必须非常靠近摄像机
+        -- origin 必须靠近摄像机
         local camPos = (Camera and Camera.CFrame and Camera.CFrame.Position) or origin
         local originDist = (origin - camPos).Magnitude
         if originDist > ORIGIN_DIST_THRESHOLD then
             return old(self, ...)
         end
 
-        -- 获取传入方向或用摄像机朝向作为备选
+        -- 获取方向向量（或使用 Camera.LookVector）
         local dirVec
         if typeof(directionArg) == "Vector3" then
             dirVec = directionArg
@@ -201,19 +191,42 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local dirUnit = (dirVec.Magnitude > 0) and dirVec.Unit or dirVec
         local lookUnit = (Camera and Camera.CFrame and Camera.CFrame.LookVector) or dirUnit
 
-        -- 方向一致性阈值（避免拦截非玩家视角的射线）
+        -- 方向一致性检查
         local dot = dirUnit:Dot(lookUnit)
         if dot < DIRECTION_DOT_THRESHOLD then
             return old(self, ...)
         end
 
-        -- 优先使用缓存目标（极轻量操作）
+        -- 条件一：短窗口内（开火瞬间），允许伪造
+        local shortWindowOk = tick() <= interceptWindowEnd
+
+        -- 条件二：备用持续路径 —— 如果缓存有目标且 origin/方向吻合，允许伪造
+        local sustainedOk = false
         local closestHead = main.currentTarget
-        if not closestHead then
+        if closestHead and closestHead.Parent then
+            local toTarget = (closestHead.Position - origin)
+            local targetDist = toTarget.Magnitude
+            if targetDist > 0 then
+                -- 额外：限制目标在合理射程内（避免伪造远距离不合理命中）
+                if targetDist <= 2000 then
+                    sustainedOk = true
+                end
+            end
+        end
+
+        if not shortWindowOk and not sustainedOk then
             return old(self, ...)
         end
 
-        -- 构造伪造命中信息并返回（不做额外真实 raycast）
+        -- 到这里：允许伪造命中（要么短窗触发，要么 sustainedOK）
+        if not closestHead or not closestHead.Parent then
+            -- 如果短窗触发但缓存目标为空，尝试即时 pick（轻量）
+            closestHead = pickBestTargetFromView()
+            if not closestHead then
+                return old(self, ...)
+            end
+        end
+
         local toTarget = (closestHead.Position - origin)
         local targetDist = toTarget.Magnitude
         if targetDist <= 0 then
