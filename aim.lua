@@ -58,7 +58,7 @@ local function getClosestHead()
     return closestHead, closestChar
 end
 
--- Update target every frame only if enabled, but to reduce lag, use Heartbeat for update
+-- Update target every frame only if enabled
 if targetUpdateConnection then targetUpdateConnection:Disconnect() end
 targetUpdateConnection = RunService.Heartbeat:Connect(function()
     if main.enable then
@@ -72,7 +72,7 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and not checkcaller() then
+    if method == "Raycast" and not checkcaller() and self == Workspace then
         local origin = args[1]
         local direction = args[2]
         local params = args[3] or RaycastParams.new()
@@ -80,61 +80,54 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         if main.enable and currentTargetHead and currentTargetChar then
             local targetPos = currentTargetHead.Position
             local dirToTarget = (targetPos - origin).Unit
-            local bulletDir = direction.Unit * direction.Magnitude -- Keep magnitude for distance
-            local dot = bulletDir.Unit:Dot(dirToTarget)
+            local distToTarget = (targetPos - origin).Magnitude
 
-            if dot > 0.7 then  -- Threshold for "aimed at target"
-                local rayDir = dirToTarget * (targetPos - origin).Magnitude
-                local customParams = RaycastParams.new()
-                customParams.FilterType = params.FilterType
-                if params.FilterDescendantsInstances then
-                    customParams.FilterDescendantsInstances = params.FilterDescendantsInstances
-                else
-                    customParams.FilterDescendantsInstances = {LocalPlayer.Character}
-                end
+            local customParams = RaycastParams.new()
+            customParams.FilterType = Enum.RaycastFilterType.Exclude
+            customParams.FilterDescendantsInstances = {LocalPlayer.Character}
 
-                local result = Workspace:Raycast(origin, rayDir, customParams)
+            local rayDir = dirToTarget * distToTarget
+            local result = Workspace:Raycast(origin, rayDir, customParams)
 
-                if main.wallpen then
-                    -- Always hit head
+            if main.wallpen then
+                -- Always hit head
+                return {
+                    Instance = currentTargetHead,
+                    Position = targetPos,
+                    Normal = -dirToTarget,
+                    Material = currentTargetHead.Material,
+                    Distance = distToTarget
+                }
+            elseif result then
+                -- Check if hit is on target
+                if result.Instance:IsDescendantOf(currentTargetChar) then
+                    -- Hit target, force head
                     return {
                         Instance = currentTargetHead,
                         Position = targetPos,
                         Normal = -dirToTarget,
                         Material = currentTargetHead.Material,
-                        Distance = (targetPos - origin).Magnitude
+                        Distance = distToTarget
                     }
-                elseif result then
-                    -- Check if hit is on target
-                    if result.Instance:IsDescendantOf(currentTargetChar) then
-                        -- Hit target, force head
-                        return {
-                            Instance = currentTargetHead,
-                            Position = targetPos,
-                            Normal = -dirToTarget,
-                            Material = currentTargetHead.Material,
-                            Distance = (targetPos - origin).Magnitude
-                        }
-                    else
-                        -- Hit wall, return wall hit (in front of head)
-                        return {
-                            Instance = result.Instance,
-                            Position = result.Position,
-                            Normal = result.Normal,
-                            Material = result.Material,
-                            Distance = result.Distance
-                        }
-                    end
                 else
-                    -- No hit, clear to target, force head
+                    -- Hit wall in front of head
                     return {
-                        Instance = currentTargetHead,
-                        Position = targetPos,
-                        Normal = -dirToTarget,
-                        Material = currentTargetHead.Material,
-                        Distance = (targetPos - origin).Magnitude
+                        Instance = result.Instance,
+                        Position = result.Position,
+                        Normal = result.Normal,
+                        Material = result.Material,
+                        Distance = result.Distance
                     }
                 end
+            else
+                -- No hit, clear to target, force head
+                return {
+                    Instance = currentTargetHead,
+                    Position = targetPos,
+                    Normal = -dirToTarget,
+                    Material = currentTargetHead.Material,
+                    Distance = distToTarget
+                }
             end
         end
     end
