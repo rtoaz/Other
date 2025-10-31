@@ -2,45 +2,20 @@ local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
-local RunService = game:GetService("RunService")
 local old
 local main = {
     enable = false,
+    wallbang = false,  -- 穿墙开关，默认 false
     teamcheck = false,
-    friendcheck = false,
-    wallbang = false,
-    line = false  -- 新增：连线开关
+    friendcheck = false
 }
 
--- 缓存最近目标（每帧更新一次，避免每个Raycast遍历）
-local cachedTarget = nil
-local lastUpdate = 0
-local UPDATE_INTERVAL = 1/30  -- 约30FPS更新，减少计算
-
--- 新增：连线Drawing对象
-local line = Drawing.new("Line")
-line.Color = Color3.new(1, 1, 1)  -- 默认白色
-line.Thickness = 2
-line.Transparency = 1  -- 不透明
-line.Visible = false
-
-local function getScreenCenter()
-    local viewportSize = Camera.ViewportSize
-    return Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
-end
-
-local function updateCachedTarget(origin)
-    cachedTarget = nil
-    local closestScreenDistance = math.huge
+local function getClosestHead()
+    local closestHead
+    local closestDistance = math.huge
 
     if not LocalPlayer.Character then return end
     if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
-
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
-
-    local screenCenter = getScreenCenter()
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -61,78 +36,75 @@ local function updateCachedTarget(origin)
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    -- 检查是否在视角内
-                    local screenPos, onScreen = Camera:WorldToScreenPoint(head.Position)
-                    local inView = onScreen and screenPos.X > 0 and screenPos.X < Camera.ViewportSize.X and screenPos.Y > 0 and screenPos.Y < Camera.ViewportSize.Y
-                    
-                    if inView then
-                        local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
-                        
-                        -- LOS检查（仅当穿墙关闭时）
-                        local hasLOS = true
-                        if not main.wallbang then
-                            local direction = (head.Position - origin).Unit * 999  -- 足够长的方向
-                            local losResult = Workspace:Raycast(origin, direction, rayParams)
-                            if losResult and not losResult.Instance:IsDescendantOf(character) then
-                                hasLOS = false
-                            end
-                        end
-
-                        if hasLOS and screenDistance < closestScreenDistance then
-                            cachedTarget = head  -- 修正变量名
-                            closestScreenDistance = screenDistance
-                        end
+                    local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+                    if distance < closestDistance then
+                        closestHead = head
+                        closestDistance = distance
                     end
                 end
             end
         end
     end
+    return closestHead
 end
-
--- 每帧更新缓存和连线（优化性能）
-RunService.Heartbeat:Connect(function()
-    local now = tick()
-    if now - lastUpdate >= UPDATE_INTERVAL then
-        local origin = Camera.CFrame.Position  -- 用相机位置作为默认origin
-        updateCachedTarget(origin)
-        lastUpdate = now
-    end
-
-    -- 新增：更新连线（从屏幕中心到目标屏幕位置）
-    if main.line and main.enable and cachedTarget then
-        local screenCenter = getScreenCenter()
-        local screenPos, onScreen = Camera:WorldToScreenPoint(cachedTarget.Position)
-        if onScreen then
-            line.From = screenCenter
-            line.To = Vector2.new(screenPos.X, screenPos.Y)
-            line.Visible = true
-        else
-            line.Visible = false
-        end
-    else
-        line.Visible = false
-    end
-end)
 
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
-    if method == "Raycast" and not checkcaller() then
-        local origin = args[1] or Camera.CFrame.Position
-        local direction = args[2] or Vector3.new(0,0,-1) * 1000  -- 默认方向，如果没提供
+    if method == "Raycast" and not checkcaller() and self == Workspace then  -- 确保是 Workspace:Raycast
+        local origin = args[1]
+        local direction = args[2]  -- 原方向
+        local raycastParams = args[3]  -- 参数（过滤等）
 
-        if main.enable and cachedTarget then
-            -- 确保目标还在视野内（简单检查）
-            local screenPos, onScreen = Camera:WorldToScreenPoint(cachedTarget.Position)
-            if onScreen then
-                return RaycastResult.new(  -- 用RaycastResult构造函数，更完整
-                    cachedTarget,
-                    cachedTarget.Position,
-                    (origin - cachedTarget.Position).Unit,
-                    Enum.Material.Plastic,
-                    (cachedTarget.Position - origin).Magnitude
-                )
+        if main.enable then
+            local closestHead = getClosestHead()
+            if closestHead then
+                -- 计算到头部的方向向量（锁定）
+                local headDirection = closestHead.Position - origin
+                local headDistance = headDirection.Magnitude
+                headDirection = headDirection.Unit * headDistance  -- 带长度的方向
+
+                if main.wallbang then
+                    -- 穿墙：直接返回头部击中
+                    return {
+                        Instance = closestHead,
+                        Position = closestHead.Position,
+                        Normal = (origin - closestHead.Position).Unit,
+                        Material = Enum.Material.Plastic,
+                        Distance = headDistance
+                    }
+                else
+                    -- 非穿墙：真实 Raycast 到头部方向
+                    local result = Workspace:Raycast(origin, headDirection, raycastParams)
+                    if result then
+                        -- 如果击中的是目标玩家身体（或头部），返回它；否则返回墙
+                        local hitCharacter = result.Instance.Parent
+                        local isTargetPlayer = hitCharacter == closestHead.Parent
+                        if isTargetPlayer then
+                            -- 击中目标，调整为头部位置（精确击头）
+                            return {
+                                Instance = closestHead,
+                                Position = closestHead.Position,
+                                Normal = result.Normal,
+                                Material = result.Material,
+                                Distance = (closestHead.Position - origin).Magnitude
+                            }
+                        else
+                            -- 击中墙，返回墙结果
+                            return result
+                        end
+                    else
+                        -- 无击中，直接返回头部（空旷环境）
+                        return {
+                            Instance = closestHead,
+                            Position = closestHead.Position,
+                            Normal = (origin - closestHead.Position).Unit,
+                            Material = Enum.Material.Plastic,
+                            Distance = headDistance
+                        }
+                    end
+                end
             end
         end
     end
@@ -184,12 +156,15 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
-        if state then
-            print("子弹追踪已开启")  -- 调试print
-        else
-            cachedTarget = nil
-            print("子弹追踪已关闭")
-        end
+    end
+})
+
+Main:Toggle({
+    Title = "开启子弹穿墙",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.wallbang = state
     end
 })
 
@@ -208,30 +183,5 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.friendcheck = state
-    end
-})
-
-Main:Toggle({
-    Title = "开启子弹穿墙",
-    Image = "bird",
-    Value = false,
-    Callback = function(state)
-        main.wallbang = state
-    end
-})
-
--- 新增：连线Toggle
-Main:Toggle({
-    Title = "开启目标连线",
-    Image = "bird",
-    Value = false,
-    Callback = function(state)
-        main.line = state
-        line.Visible = false  -- 关闭时隐藏
-        if state then
-            print("目标连线已开启")
-        else
-            print("目标连线已关闭")
-        end
     end
 })
