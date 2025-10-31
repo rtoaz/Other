@@ -8,25 +8,37 @@ local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    wallbang = false  -- 穿墙开关
+    wallbang = false,
+    line = false  -- 新增：连线开关
 }
 
--- 获取屏幕中心
+-- 缓存最近目标（每帧更新一次，避免每个Raycast遍历）
+local cachedTarget = nil
+local lastUpdate = 0
+local UPDATE_INTERVAL = 1/30  -- 约30FPS更新，减少计算
+
+-- 新增：连线Drawing对象
+local line = Drawing.new("Line")
+line.Color = Color3.new(1, 1, 1)  -- 默认白色
+line.Thickness = 2
+line.Transparency = 1  -- 不透明
+line.Visible = false
+
 local function getScreenCenter()
     local viewportSize = Camera.ViewportSize
     return Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
 end
 
-local function getClosestHead(origin)
-    local closestHead
+local function updateCachedTarget(origin)
+    cachedTarget = nil
     local closestScreenDistance = math.huge
 
-    if not LocalPlayer.Character then return nil end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil end
+    if not LocalPlayer.Character then return end
+    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
 
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}  -- 忽略自己
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
 
     local screenCenter = getScreenCenter()
 
@@ -49,28 +61,25 @@ local function getClosestHead(origin)
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
 
                 if root and head and humanoid and humanoid.Health > 0 then
-                    -- 新增：检查是否在视角内（屏幕投影）
+                    -- 检查是否在视角内
                     local screenPos, onScreen = Camera:WorldToScreenPoint(head.Position)
                     local inView = onScreen and screenPos.X > 0 and screenPos.X < Camera.ViewportSize.X and screenPos.Y > 0 and screenPos.Y < Camera.ViewportSize.Y
                     
                     if inView then
                         local screenDistance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
                         
-                        -- 新增：LOS检查（仅当穿墙关闭时）
+                        -- LOS检查（仅当穿墙关闭时）
                         local hasLOS = true
                         if not main.wallbang then
-                            local direction = head.Position - origin
+                            local direction = (head.Position - origin).Unit * 999  -- 足够长的方向
                             local losResult = Workspace:Raycast(origin, direction, rayParams)
-                            if losResult then
-                                -- 如果击中了非目标玩家的部分，则有障碍
-                                if not losResult.Instance:IsDescendantOf(character) then
-                                    hasLOS = false
-                                end
+                            if losResult and not losResult.Instance:IsDescendantOf(character) then
+                                hasLOS = false
                             end
                         end
 
                         if hasLOS and screenDistance < closestScreenDistance then
-                            closestHead = head
+                            cachedTarget = head  -- 修正变量名
                             closestScreenDistance = screenDistance
                         end
                     end
@@ -78,8 +87,32 @@ local function getClosestHead(origin)
             end
         end
     end
-    return closestHead
 end
+
+-- 每帧更新缓存和连线（优化性能）
+RunService.Heartbeat:Connect(function()
+    local now = tick()
+    if now - lastUpdate >= UPDATE_INTERVAL then
+        local origin = Camera.CFrame.Position  -- 用相机位置作为默认origin
+        updateCachedTarget(origin)
+        lastUpdate = now
+    end
+
+    -- 新增：更新连线（从屏幕中心到目标屏幕位置）
+    if main.line and main.enable and cachedTarget then
+        local screenCenter = getScreenCenter()
+        local screenPos, onScreen = Camera:WorldToScreenPoint(cachedTarget.Position)
+        if onScreen then
+            line.From = screenCenter
+            line.To = Vector2.new(screenPos.X, screenPos.Y)
+            line.Visible = true
+        else
+            line.Visible = false
+        end
+    else
+        line.Visible = false
+    end
+end)
 
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -87,17 +120,19 @@ old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 
     if method == "Raycast" and not checkcaller() then
         local origin = args[1] or Camera.CFrame.Position
+        local direction = args[2] or Vector3.new(0,0,-1) * 1000  -- 默认方向，如果没提供
 
-        if main.enable then
-            local closestHead = getClosestHead(origin)  -- 传入origin用于LOS
-            if closestHead then
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = (closestHead.Position - origin).Magnitude
-                }
+        if main.enable and cachedTarget then
+            -- 确保目标还在视野内（简单检查）
+            local screenPos, onScreen = Camera:WorldToScreenPoint(cachedTarget.Position)
+            if onScreen then
+                return RaycastResult.new(  -- 用RaycastResult构造函数，更完整
+                    cachedTarget,
+                    cachedTarget.Position,
+                    (origin - cachedTarget.Position).Unit,
+                    Enum.Material.Plastic,
+                    (cachedTarget.Position - origin).Magnitude
+                )
             end
         end
     end
@@ -149,6 +184,12 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.enable = state
+        if state then
+            print("子弹追踪已开启")  -- 调试print
+        else
+            cachedTarget = nil
+            print("子弹追踪已关闭")
+        end
     end
 })
 
@@ -176,5 +217,21 @@ Main:Toggle({
     Value = false,
     Callback = function(state)
         main.wallbang = state
+    end
+})
+
+-- 新增：连线Toggle
+Main:Toggle({
+    Title = "开启目标连线",
+    Image = "bird",
+    Value = false,
+    Callback = function(state)
+        main.line = state
+        line.Visible = false  -- 关闭时隐藏
+        if state then
+            print("目标连线已开启")
+        else
+            print("目标连线已关闭")
+        end
     end
 })
