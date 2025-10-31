@@ -1,6 +1,7 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
@@ -97,36 +98,90 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+-- 仅在短时间窗口内拦截 Raycast，避免阻塞渲染（默认短窗 0.12s）
+local interceptWindowEnd = 0
+local INTERCEPT_WINDOW = 0.12
+local ORIGIN_DIST_THRESHOLD = 10       -- origin 距离摄像机阈值（可调）
+local DIRECTION_DOT_THRESHOLD = 0.90  -- 射线方向与相机朝向夹角阈值（越接近 1 要求越严格）
+
+local function startInterceptWindow()
+    interceptWindowEnd = tick() + INTERCEPT_WINDOW
+end
+
+local function onInputBegan(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        startInterceptWindow()
+    end
+end
+
+UserInputService.InputBegan:Connect(onInputBegan)
+-- 兼容 LocalPlayer:GetMouse() 触发（有些环境/工具需要）
+pcall(function()
+    local m = LocalPlayer:GetMouse()
+    if m then
+        m.Button1Down:Connect(function()
+            startInterceptWindow()
+        end)
+    end
+end)
+
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
     if method == "Raycast" and not checkcaller() then
         local origin = args[1] or (Camera and Camera.CFrame and Camera.CFrame.Position) or Vector3.new()
-        -- 仅拦截靠近摄像机的射线（避免拦截引擎/渲染使用的全局射线）
-        local camPos = (Camera and Camera.CFrame and Camera.CFrame.Position) or origin
-        local originDist = (origin - camPos).Magnitude
-        if originDist > 20 then
+        local directionArg = args[2]
+
+        if not main.enable then
             return old(self, ...)
         end
 
-        if main.enable then
-            local closestHead = main.currentTarget or pickBestTargetFromView()
-            if closestHead then
-                local toTarget = (closestHead.Position - origin)
-                local targetDist = toTarget.Magnitude
-                if targetDist <= 0 then
-                    return old(self, ...)
-                end
+        -- 只在拦截窗口内尝试伪造
+        if tick() > interceptWindowEnd then
+            return old(self, ...)
+        end
 
-                return {
-                    Instance = closestHead,
-                    Position = closestHead.Position,
-                    Normal = (origin - closestHead.Position).Unit,
-                    Material = Enum.Material.Plastic,
-                    Distance = targetDist
-                }
+        -- origin 必须靠近摄像机（避免拦截引擎/远程射线）
+        local camPos = (Camera and Camera.CFrame and Camera.CFrame.Position) or origin
+        local originDist = (origin - camPos).Magnitude
+        if originDist > ORIGIN_DIST_THRESHOLD then
+            return old(self, ...)
+        end
+
+        -- 计算传入方向（若无则使用 Camera.LookVector）
+        local dirVec
+        if typeof(directionArg) == "Vector3" then
+            dirVec = directionArg
+        else
+            dirVec = (Camera and Camera.CFrame and Camera.CFrame.LookVector) or Vector3.new(0,0,-1)
+        end
+        local dirUnit = (dirVec.Magnitude > 0) and dirVec.Unit or dirVec
+        local lookUnit = (Camera and Camera.CFrame and Camera.CFrame.LookVector) or dirUnit
+
+        -- 方向与摄像机朝向要一致，避免拦截到与玩家视角毫不相关的射线
+        local dot = dirUnit:Dot(lookUnit)
+        if dot < DIRECTION_DOT_THRESHOLD then
+            return old(self, ...)
+        end
+
+        -- 现在安全地尝试伪造命中：优先使用缓存目标
+        local closestHead = main.currentTarget or pickBestTargetFromView()
+        if closestHead then
+            local toTarget = (closestHead.Position - origin)
+            local targetDist = toTarget.Magnitude
+            if targetDist <= 0 then
+                return old(self, ...)
             end
+
+            return {
+                Instance = closestHead,
+                Position = closestHead.Position,
+                Normal = (origin - closestHead.Position).Unit,
+                Material = Enum.Material.Plastic,
+                Distance = targetDist
+            }
         end
     end
 
