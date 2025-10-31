@@ -1,17 +1,19 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 local old
+
 local main = {
     enable = false,
     teamcheck = false,
     friendcheck = false,
-    wallbang = false -- 子弹穿墙模式，默认关闭
+    wallbang = false,
+    targetLine = false,
+    currentTarget = nil
 }
 
--- 新增：目标连线开关（默认关闭）与绘图对象（默认白色）
-main.targetLine = false
 local DrawingAvailable, Drawing = pcall(function() return Drawing end)
 local targetLineDrawing = nil
 if DrawingAvailable and Drawing then
@@ -20,7 +22,7 @@ if DrawingAvailable and Drawing then
         l.Visible = false
         l.From = Vector2.new(0,0)
         l.To = Vector2.new(0,0)
-        l.Color = Color3.fromRGB(255,255,255) -- 默认白色
+        l.Color = Color3.fromRGB(255,255,255)
         l.Thickness = 1.5
         l.Transparency = 1
         return l
@@ -30,15 +32,14 @@ if DrawingAvailable and Drawing then
     end
 end
 
-local function getClosestHead()
-    local closestHead
-    local closestScore = math.huge
-
-    if not LocalPlayer.Character then return end
-    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+local function pickBestTargetFromView()
+    if not LocalPlayer.Character then return nil end
+    if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil end
 
     local viewportSize = Camera.ViewportSize
     local center = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+    local best = nil
+    local bestScore = math.huge
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -54,69 +55,81 @@ local function getClosestHead()
 
             if not skip then
                 local character = player.Character
-                local root = character:FindFirstChild("HumanoidRootPart")
                 local head = character:FindFirstChild("Head")
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-                if root and head and humanoid and humanoid.Health > 0 then
+                if head and humanoid and humanoid.Health > 0 then
                     local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                    -- 只考虑视角内的玩家
                     if onScreen then
                         local screenVec = Vector2.new(screenPos.X, screenPos.Y)
                         local distToCenter = (screenVec - center).Magnitude
-                        -- 优先视线中间（距离中心小的优先），同时作为评分使用
-                        if distToCenter < closestScore then
-                            closestHead = head
-                            closestScore = distToCenter
+                        if distToCenter < bestScore then
+                            best = head
+                            bestScore = distToCenter
                         end
                     end
                 end
             end
         end
     end
-    return closestHead
+
+    return best
 end
+
+RunService.RenderStepped:Connect(function()
+    local best = pickBestTargetFromView()
+    main.currentTarget = best
+
+    if targetLineDrawing then
+        if main.targetLine and best and best.Parent then
+            local screenPos, onScreen = Camera:WorldToViewportPoint(best.Position)
+            if onScreen then
+                local viewportSize = Camera.ViewportSize
+                local center = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+                targetLineDrawing.From = center
+                targetLineDrawing.To = Vector2.new(screenPos.X, screenPos.Y)
+                targetLineDrawing.Visible = true
+            else
+                targetLineDrawing.Visible = false
+            end
+        else
+            targetLineDrawing.Visible = false
+        end
+    end
+end)
 
 old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
 
     if method == "Raycast" and not checkcaller() then
-        local origin = args[1] or Camera.CFrame.Position
+        local origin = args[1] or (Camera and Camera.CFrame and Camera.CFrame.Position) or Vector3.new()
+        -- 仅拦截靠近摄像机的射线（避免拦截引擎/渲染使用的全局射线）
+        local camPos = (Camera and Camera.CFrame and Camera.CFrame.Position) or origin
+        local originDist = (origin - camPos).Magnitude
+        if originDist > 20 then
+            return old(self, ...)
+        end
 
         if main.enable then
-            local closestHead = getClosestHead()
+            local closestHead = main.currentTarget or pickBestTargetFromView()
             if closestHead then
-                local direction = (closestHead.Position - origin).Unit
-                local distance = (closestHead.Position - origin).Magnitude
-
-                -- 使用原始（被保存的）metamethod来执行真实的射线检测以判断是否被遮挡
-                local realResult = old(self, origin, direction * distance)
-
-                -- 当“穿墙模式关闭”且射线检测到的第一个命中不是目标（即被墙或其他物体挡住）时，调用原始行为（不伪造命中）
-                if not main.wallbang then
-                    if realResult and realResult.Instance then
-                        -- 如果真实命中的是目标或目标的子部件，则允许伪造命中（视为未被阻挡）
-                        if realResult.Instance:IsDescendantOf(closestHead.Parent) == false then
-                            return old(self, ...)
-                        end
-                    else
-                        -- 没有真实命中（视线透明），继续走后面的伪造命中逻辑（允许命中）
-                        -- do nothing here, 会走到返回伪造命中的代码
-                    end
+                local toTarget = (closestHead.Position - origin)
+                local targetDist = toTarget.Magnitude
+                if targetDist <= 0 then
+                    return old(self, ...)
                 end
 
-                -- 否则（穿墙模式打开 或 目标可见），返回伪造的命中结果
                 return {
                     Instance = closestHead,
                     Position = closestHead.Position,
                     Normal = (origin - closestHead.Position).Unit,
                     Material = Enum.Material.Plastic,
-                    Distance = distance
+                    Distance = targetDist
                 }
             end
         end
     end
+
     return old(self, ...)
 end))
 
@@ -128,7 +141,7 @@ local Window = WindUI:CreateWindow({
     IconThemed = true,
     Author = "idk",
     Folder = "CloudHub",
-    Size = UDim2.fromOffset(300, 270),
+    Size = UDim2.fromOffset(320, 300),
     Transparent = true,
     Theme = "Dark",
     User = {
@@ -146,7 +159,7 @@ Window:EditOpenButton({
     CornerRadius = UDim.new(0,16),
     StrokeThickness = 2,
     Color = ColorSequence.new(
-        Color3.fromHex("FF0F7B"), 
+        Color3.fromHex("FF0F7B"),
         Color3.fromHex("F89B29")
     ),
     Draggable = true,
@@ -195,7 +208,6 @@ Main:Toggle({
     end
 })
 
--- 增加 UI 开关：目标连线（默认白色，默认关闭，子弹追踪未开启也有效）
 Main:Toggle({
     Title = "显示目标连线",
     Image = "line",
@@ -207,30 +219,3 @@ Main:Toggle({
         end
     end
 })
-
--- 更新连线位置（每帧）——即使子弹追踪未开启也会生效
-local RunService = game:GetService("RunService")
-RunService.RenderStepped:Connect(function()
-    if targetLineDrawing then
-        if main.targetLine then
-            local target = getClosestHead()
-            if target and target.Parent then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(target.Position)
-                if onScreen then
-                    local viewportSize = Camera.ViewportSize
-                    local center = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
-                    -- 从视角中心到目标头部的连线
-                    targetLineDrawing.From = center
-                    targetLineDrawing.To = Vector2.new(screenPos.X, screenPos.Y)
-                    targetLineDrawing.Visible = true
-                else
-                    targetLineDrawing.Visible = false
-                end
-            else
-                targetLineDrawing.Visible = false
-            end
-        else
-            targetLineDrawing.Visible = false
-        end
-    end
-end)
